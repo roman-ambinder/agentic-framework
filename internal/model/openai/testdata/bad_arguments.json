@@ -1,0 +1,4 @@
+{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"test-model",
+ "choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":"Reading the file.","refusal":null,
+   "tool_calls":[{"id":"call_1","type":"function","function":{"name":"fs__read_file","arguments":"{\"path\":"}}]}}],
+ "usage":{"prompt_tokens":120,"completion_tokens":25,"total_tokens":145,"prompt_tokens_details":{"cached_tokens":100}}}
