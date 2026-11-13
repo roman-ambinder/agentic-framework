@@ -172,36 +172,79 @@ func (l *loop) step(step uint32) error {
 	return l.afterResponse(resp, calls)
 }
 
-// callModel records model_call_started and calls the model. It returns a nil
-// response, and sets l.final, when the call failed or was cancelled.
+// callModel calls the model, retrying retryable failures as Config.Retry says.
+// Every attempt writes model_call_started. It returns a nil response, and sets
+// l.final, when the call failed for good or was cancelled.
 func (l *loop) callModel(req *model.Request, callID string, step uint32) (*model.Response, error) {
+	p := l.cfg.Retry.withDefaults()
+	for attempt := 1; ; attempt++ {
+		resp, genErr, err := l.attemptModel(req, callID, step, attempt)
+		if err != nil {
+			return nil, err
+		}
+		if genErr == nil {
+			return resp, nil
+		}
+		if err := l.afterFailedAttempt(genErr, callID, attempt, p); err != nil || l.final != nil {
+			return nil, err
+		}
+	}
+}
+
+// attemptModel records model_call_started and calls the model once. genErr is
+// the model's error; err is a failure to use the event log.
+func (l *loop) attemptModel(req *model.Request, callID string, step uint32, attempt int) (resp *model.Response, genErr, err error) {
 	startSeq, err := l.add(&adlcv1.Event{Payload: &adlcv1.Event_ModelCallStarted{ModelCallStarted: &adlcv1.ModelCallStarted{
-		CallId: callID, Step: step, Provider: l.deps.Model.Provider(), Model: l.cfg.Model, Attempt: 1,
+		CallId: callID, Step: step, Provider: l.deps.Model.Provider(), Model: l.cfg.Model,
+		Attempt: uint32(attempt), //nolint:gosec // attempt is small
 	}}})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	l.startSeq = startSeq
 	l.t0 = l.deps.Now()
-	resp, err := l.deps.Model.Generate(l.callCtx, req)
-	if err == nil {
-		return resp, nil
+	resp, genErr = l.deps.Model.Generate(l.callCtx, req)
+	return resp, genErr, nil
+}
+
+// afterFailedAttempt records model_call_failed, then either waits for the next
+// attempt (returns nil with l.final unset) or finishes the run.
+func (l *loop) afterFailedAttempt(genErr error, callID string, attempt int, p RetryPolicy) error {
+	ctxDone := l.ctx.Err() != nil || l.callCtx.Err() != nil
+	retry := !ctxDone && model.IsRetryable(genErr) && attempt < p.MaxAttempts
+	if err := l.recordFailure(genErr, callID, retry); err != nil {
+		return err
 	}
-	if stopped, err2 := l.stopForContext(); stopped {
-		return nil, err2
+	if ctxDone {
+		_, err := l.stopForContext()
+		return err
 	}
+	if !retry {
+		return l.finish(adlcv1.StopReason_STOP_REASON_ERROR, "", genErr.Error())
+	}
+	if e := beforeModelCall(l.cfg.Budget, l.usage()); e != nil {
+		return l.finishBudget(e)
+	}
+	if err := l.deps.Sleep(l.callCtx, p.Delay(attempt)); err != nil {
+		if stopped, err2 := l.stopForContext(); stopped {
+			return err2
+		}
+		return l.finish(adlcv1.StopReason_STOP_REASON_ERROR, "", "retry wait: "+err.Error())
+	}
+	return nil
+}
+
+func (l *loop) recordFailure(genErr error, callID string, willRetry bool) error {
 	class, status := adlcv1.ErrorClass_ERROR_CLASS_INTERNAL, 0
 	var me *model.Error
-	if errors.As(err, &me) {
+	if errors.As(genErr, &me) {
 		class, status = me.Class, me.HTTPStatus
 	}
-	if _, err2 := l.add(&adlcv1.Event{Payload: &adlcv1.Event_ModelCallFailed{ModelCallFailed: &adlcv1.ModelCallFailed{
-		CallId: callID, ErrorClass: class, Message: err.Error(), WillRetry: false,
+	_, err := l.add(&adlcv1.Event{Payload: &adlcv1.Event_ModelCallFailed{ModelCallFailed: &adlcv1.ModelCallFailed{
+		CallId: callID, ErrorClass: class, Message: genErr.Error(), WillRetry: willRetry,
 		HttpStatus: int32(status), //nolint:gosec // HTTP status fits in int32
-	}}}); err2 != nil {
-		return nil, err2
-	}
-	return nil, l.finish(adlcv1.StopReason_STOP_REASON_ERROR, "", err.Error())
+	}}})
+	return err
 }
 
 // recordResponse writes model_call_completed with the cost of the call.

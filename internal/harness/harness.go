@@ -39,6 +39,7 @@ type Config struct {
 	Budget             *adlcv1.Budget
 	Price              model.Price
 	MaxToolOutputBytes int // 0 = toolrouter.DefaultMaxModelBytes
+	Retry              RetryPolicy
 }
 
 // Deps are the run's collaborators.

@@ -269,7 +269,9 @@ func TestRunMaxTokensWithoutToolCalls(t *testing.T) {
 
 func TestRunModelError(t *testing.T) {
 	merr := &model.Error{Class: adlcv1.ErrorClass_ERROR_CLASS_RATE_LIMIT, HTTPStatus: 429, Retryable: true, Err: errors.New("slow down")}
-	r := runHarness(t, context.Background(), baseConfig(), defaultDeps(t), model.FakeTurn{Err: merr})
+	cfg := baseConfig()
+	cfg.Retry.MaxAttempts = 1
+	r := runHarness(t, context.Background(), cfg, defaultDeps(t), model.FakeTurn{Err: merr})
 	wantStop(t, r.state, stopError, merr.Error())
 	wantKinds(t, r.events, "run_started", "model_call_started", "model_call_failed", "run_completed")
 	f := r.events[2].GetModelCallFailed()
@@ -679,4 +681,214 @@ func TestRunNoBudget(t *testing.T) {
 	r := runHarness(t, context.Background(), baseConfig(), defaultDeps(t),
 		toolTurn(readCall("t1", "a")), toolTurn(readCall("t2", "b")), textTurn("done"))
 	wantStop(t, r.state, stopCompleted, "")
+}
+
+func rateLimited() model.FakeTurn {
+	return model.FakeTurn{Err: &model.Error{
+		Class: adlcv1.ErrorClass_ERROR_CLASS_RATE_LIMIT, HTTPStatus: 429, Retryable: true, Err: errors.New("slow down"),
+	}}
+}
+
+// sleepRecorder replaces Deps.Sleep and records the requested waits.
+type sleepRecorder struct{ waits []time.Duration }
+
+func (s *sleepRecorder) sleep(ctx context.Context, d time.Duration) error {
+	s.waits = append(s.waits, d)
+	return ctx.Err()
+}
+
+func retryDeps(t *testing.T) (Deps, *sleepRecorder) {
+	t.Helper()
+	rec := &sleepRecorder{}
+	deps := defaultDeps(t)
+	deps.Sleep = rec.sleep
+	return deps, rec
+}
+
+func wantWaits(t *testing.T, rec *sleepRecorder, want ...time.Duration) {
+	t.Helper()
+	if !reflect.DeepEqual(rec.waits, want) {
+		t.Fatalf("sleeps = %v, want %v", rec.waits, want)
+	}
+}
+
+func attempts(evs []*adlcv1.Event) []uint32 {
+	var out []uint32
+	for _, s := range pick(evs, (*adlcv1.Event).GetModelCallStarted) {
+		out = append(out, s.GetAttempt())
+	}
+	return out
+}
+
+func willRetry(evs []*adlcv1.Event) []bool {
+	var out []bool
+	for _, f := range pick(evs, (*adlcv1.Event).GetModelCallFailed) {
+		out = append(out, f.GetWillRetry())
+	}
+	return out
+}
+
+func TestRunRetriesRetryableError(t *testing.T) {
+	deps, rec := retryDeps(t)
+	r := runHarness(t, context.Background(), baseConfig(), deps, rateLimited(), rateLimited(), textTurn("ok"))
+	wantKinds(t, r.events, "run_started",
+		"model_call_started", "model_call_failed",
+		"model_call_started", "model_call_failed",
+		"model_call_started", "model_call_completed", "run_completed")
+	wantStop(t, r.state, stopCompleted, "")
+	if got := attempts(r.events); !reflect.DeepEqual(got, []uint32{1, 2, 3}) {
+		t.Fatalf("attempts = %v", got)
+	}
+	if got := willRetry(r.events); !reflect.DeepEqual(got, []bool{true, true}) {
+		t.Fatalf("will_retry = %v", got)
+	}
+	for _, s := range pick(r.events, (*adlcv1.Event).GetModelCallStarted) {
+		if s.GetCallId() != "m1" || s.GetStep() != 1 {
+			t.Fatalf("model_call_started = %v", s)
+		}
+	}
+	wantWaits(t, rec, time.Second, 2*time.Second)
+}
+
+func TestRunGivesUpAfterMaxAttempts(t *testing.T) {
+	deps, rec := retryDeps(t)
+	r := runHarness(t, context.Background(), baseConfig(), deps, rateLimited(), rateLimited(), rateLimited(), textTurn("unused"))
+	if got := willRetry(r.events); !reflect.DeepEqual(got, []bool{true, true, false}) {
+		t.Fatalf("will_retry = %v", got)
+	}
+	if r.state.StopReason != stopError {
+		t.Fatalf("stop = %s", r.state.StopReason)
+	}
+	wantWaits(t, rec, time.Second, 2*time.Second)
+}
+
+func TestRunDoesNotRetryNonRetryable(t *testing.T) {
+	deps, rec := retryDeps(t)
+	bad := model.FakeTurn{Err: &model.Error{Class: adlcv1.ErrorClass_ERROR_CLASS_MODEL, HTTPStatus: 400, Err: errors.New("bad")}}
+	r := runHarness(t, context.Background(), baseConfig(), deps, bad, textTurn("unused"))
+	if got := attempts(r.events); len(got) != 1 {
+		t.Fatalf("attempts = %v", got)
+	}
+	if got := willRetry(r.events); !reflect.DeepEqual(got, []bool{false}) {
+		t.Fatalf("will_retry = %v", got)
+	}
+	if r.state.StopReason != stopError {
+		t.Fatalf("stop = %s", r.state.StopReason)
+	}
+	wantWaits(t, rec)
+}
+
+func TestRunNoRetriesWhenMaxAttemptsOne(t *testing.T) {
+	deps, rec := retryDeps(t)
+	cfg := baseConfig()
+	cfg.Retry.MaxAttempts = 1
+	r := runHarness(t, context.Background(), cfg, deps, rateLimited(), textTurn("unused"))
+	if got := attempts(r.events); len(got) != 1 {
+		t.Fatalf("attempts = %v", got)
+	}
+	if r.state.StopReason != stopError {
+		t.Fatalf("stop = %s", r.state.StopReason)
+	}
+	wantWaits(t, rec)
+}
+
+func TestRunCancelDuringBackoff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	deps := defaultDeps(t)
+	deps.Sleep = func(context.Context, time.Duration) error {
+		cancel()
+		return context.Canceled
+	}
+	r := runHarness(t, ctx, baseConfig(), deps, rateLimited(), textTurn("unused"))
+	wantStop(t, r.state, adlcv1.StopReason_STOP_REASON_CANCELLED, "")
+	if got := attempts(r.events); len(got) != 1 {
+		t.Fatalf("attempts = %v", got)
+	}
+}
+
+func TestRunRetriesDoNotCountAsSteps(t *testing.T) {
+	deps, _ := retryDeps(t)
+	cfg := baseConfig()
+	cfg.Budget = &adlcv1.Budget{MaxSteps: 1}
+	r := runHarness(t, context.Background(), cfg, deps, rateLimited(), textTurn("ok"))
+	wantStop(t, r.state, stopCompleted, "")
+}
+
+func TestRunRetryStopsWhenBudgetRunsOutDuringBackoff(t *testing.T) {
+	clock := &stepClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	deps := defaultDeps(t)
+	deps.Now = clock.Now
+	deps.Sleep = func(context.Context, time.Duration) error { t.Fatal("must not sleep"); return nil }
+	cfg := baseConfig()
+	cfg.Budget = &adlcv1.Budget{MaxWallClock: durationpb.New(time.Minute)}
+	slowFail := &advancingModel{Fake: model.NewFake(rateLimited(), textTurn("unused")), clock: clock}
+	store := newLog(t)
+	deps.Log, deps.Model = store, slowFail
+	state, err := Run(context.Background(), cfg, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFolds(t, store, "r1", state)
+	wantBudgetStop(t, state, budgetWall, "max_wall_clock 1m0s reached")
+}
+
+// advancingModel moves the test clock by a minute on every call.
+type advancingModel struct {
+	*model.Fake
+	clock *stepClock
+}
+
+func (m *advancingModel) Generate(ctx context.Context, req *model.Request) (*model.Response, error) {
+	m.clock.t = m.clock.t.Add(time.Minute)
+	return m.Fake.Generate(ctx, req)
+}
+
+func TestRunRetryParentSeq(t *testing.T) {
+	deps, _ := retryDeps(t)
+	r := runHarness(t, context.Background(), baseConfig(), deps, rateLimited(), rateLimited(), textTurn("ok"))
+	var lastStart uint64
+	var completed *adlcv1.Event
+	for _, ev := range r.events {
+		if ev.GetModelCallStarted() != nil {
+			lastStart = ev.GetSeq()
+		}
+		if ev.GetModelCallCompleted() != nil {
+			completed = ev
+		}
+	}
+	if completed.GetParentSeq() != lastStart {
+		t.Fatalf("parent_seq = %d, want %d", completed.GetParentSeq(), lastStart)
+	}
+}
+
+func TestRunCancelDuringModelCallRecordsFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := newLog(t)
+	deps, rec := retryDeps(t)
+	deps.Log = store
+	deps.Model = cancelingFailModel{Fake: model.NewFake(), cancel: cancel}
+	state, err := Run(ctx, baseConfig(), deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := assertFolds(t, store, "r1", state)
+	wantKinds(t, events, "run_started", "model_call_started", "model_call_failed", "run_completed")
+	wantStop(t, state, adlcv1.StopReason_STOP_REASON_CANCELLED, "")
+	if got := willRetry(events); !reflect.DeepEqual(got, []bool{false}) {
+		t.Fatalf("will_retry = %v", got)
+	}
+	wantWaits(t, rec)
+}
+
+// cancelingFailModel cancels the run and fails with a retryable error.
+type cancelingFailModel struct {
+	*model.Fake
+	cancel context.CancelFunc
+}
+
+func (m cancelingFailModel) Generate(context.Context, *model.Request) (*model.Response, error) {
+	m.cancel()
+	return nil, rateLimited().Err
 }
