@@ -27,6 +27,7 @@ type evalOptions struct {
 	suiteDir, db, out, workDir, image string
 	agents, bugs                      []string
 	keepWorkspaces, dryRun            bool
+	repeat                            int
 }
 
 func newEvalCmd() *cobra.Command {
@@ -51,6 +52,7 @@ func newEvalCmd() *cobra.Command {
 	f.StringVar(&o.image, "image", evals.DefaultImage, "sandbox image")
 	f.BoolVar(&o.keepWorkspaces, "keep-workspaces", false, "keep the workspace directory after the run")
 	f.BoolVar(&o.dryRun, "dry-run", false, "load the suite and agents, print the worst-case spend and exit (no Docker, no model calls)")
+	f.IntVar(&o.repeat, "repeat", 1, "attempts per bug and agent (1 to 20)")
 	_ = cmd.MarkFlagRequired("agents")
 	return cmd
 }
@@ -88,12 +90,15 @@ func loadAgents(paths []string) ([]*agentconfig.Agent, error) {
 
 // runEval implements `adlc eval`.
 func runEval(ctx context.Context, o evalOptions, stdout io.Writer) error {
+	if o.repeat < 1 || o.repeat > 20 {
+		return &exitError{code: 1, err: errors.New("eval: --repeat must be between 1 and 20")}
+	}
 	suite, agents, bugs, err := loadEvalInputs(o)
 	if err != nil {
 		return &exitError{code: 1, err: err}
 	}
 	if o.dryRun {
-		return evalDryRun(stdout, bugs, agents)
+		return evalDryRun(stdout, bugs, agents, o.repeat)
 	}
 	if err := os.MkdirAll(filepath.Dir(o.db), 0o755); err != nil {
 		return &exitError{code: 1, err: fmt.Errorf("eval: create db directory: %w", err)}
@@ -118,11 +123,11 @@ func runEval(ctx context.Context, o evalOptions, stdout io.Writer) error {
 
 	r := &evals.Runner{
 		Suite: suite, Sandbox: backend, Log: store, Image: o.image, WorkDir: workDir,
-		RunAgent: evalRunAgent(store), Stdout: stdout,
+		RunAgent: evalRunAgent(store), Stdout: stdout, Repeat: o.repeat,
 	}
 	started := time.Now()
 	results, runErr := r.RunAll(ctx, bugs, agents)
-	rep := evals.Report{Suite: suite.Name, StartedAt: started, FinishedAt: time.Now(), Results: results}
+	rep := evals.Report{Suite: suite.Name, StartedAt: started, FinishedAt: time.Now(), Results: results, Repeat: o.repeat}
 	rep.Summary = evals.Summarize(rep.Results)
 	out := o.out
 	if out == "" {
@@ -139,10 +144,10 @@ func runEval(ctx context.Context, o evalOptions, stdout io.Writer) error {
 	return nil
 }
 
-// evalDryRun prints "bugs=<n> agents=<m> worst_case_usd=<x>", where the worst
-// case is bugs x the sum of every agent's budget.max_usd. An agent without
+// evalDryRun prints "bugs=<n> agents=<m> repeat=<r> worst_case_usd=<x>", where
+// the worst case is bugs x repeat x the sum of every agent's budget.max_usd. An agent without
 // max_usd has no spend limit, so the dry run fails.
-func evalDryRun(stdout io.Writer, bugs []evals.Bug, agents []*agentconfig.Agent) error {
+func evalDryRun(stdout io.Writer, bugs []evals.Bug, agents []*agentconfig.Agent, repeat int) error {
 	var perBug int64
 	for _, a := range agents {
 		micros, _ := agentconfig.ParseMicroUSD(a.Budget.MaxUSD)
@@ -151,8 +156,8 @@ func evalDryRun(stdout io.Writer, bugs []evals.Bug, agents []*agentconfig.Agent)
 		}
 		perBug += micros
 	}
-	total := perBug * int64(len(bugs))
-	fmt.Fprintf(stdout, "bugs=%d agents=%d worst_case_usd=%d.%06d\n", len(bugs), len(agents), total/1_000_000, total%1_000_000)
+	total := perBug * int64(len(bugs)) * int64(repeat)
+	fmt.Fprintf(stdout, "bugs=%d agents=%d repeat=%d worst_case_usd=%d.%06d\n", len(bugs), len(agents), repeat, total/1_000_000, total%1_000_000)
 	return nil
 }
 
