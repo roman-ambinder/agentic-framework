@@ -24,6 +24,9 @@ type runOptions struct {
 	agentPath, task, db, fakeScript, runID, modelName string
 	// startHook starts one hook plugin; nil means startPluginHook. Tests set it.
 	startHook hookStarter
+	// workspaceOut and keepSandbox only apply to `adlc run` with a sandbox.
+	workspaceOut string
+	keepSandbox  bool
 }
 
 func newRunCmd() *cobra.Command {
@@ -45,6 +48,8 @@ func newRunCmd() *cobra.Command {
 	f.StringVar(&o.fakeScript, "fake-script", "", "fake model script (provider fake only)")
 	f.StringVar(&o.runID, "run-id", "", "run id (default: generated)")
 	f.StringVar(&o.modelName, "model-name", "", "overrides model.name from the agent file")
+	f.StringVar(&o.workspaceOut, "workspace-out", "", "where to copy the sandbox workspace after the run (default .adlc/workspaces/<run-id>)")
+	f.BoolVar(&o.keepSandbox, "keep-sandbox", false, "do not destroy the sandbox container after the run")
 	_ = cmd.MarkFlagRequired("task")
 	return cmd
 }
@@ -70,8 +75,14 @@ func loadAgent(o runOptions) (*agentconfig.Agent, error) {
 	return a, nil
 }
 
-// runAgent runs the agent once and prints the summary to stdout.
+// runAgent runs the agent once and prints the summary to stdout. A sandbox,
+// if the agent declares one, comes from the Docker backend.
 func runAgent(ctx context.Context, o runOptions, stdout io.Writer) error {
+	return runAgentWith(ctx, o, stdout, openDockerRunBackend)
+}
+
+// runAgentWith is runAgent with an injectable sandbox backend.
+func runAgentWith(ctx context.Context, o runOptions, stdout io.Writer, openSandbox openRunBackend) error {
 	a, err := loadAgent(o)
 	if err != nil {
 		return &exitError{code: 1, err: err}
@@ -92,16 +103,26 @@ func runAgent(ctx context.Context, o runOptions, stdout io.Writer) error {
 		return &exitError{code: 1, err: err}
 	}
 	defer store.Close()
+	sb, err := startRunSandbox(ctx, a, runID, openSandbox)
+	if err != nil {
+		return &exitError{code: 1, err: err}
+	}
+	defer sb.close()
 	cfg, deps, cleanup, err := buildRun(ctx, a, o, runID, store)
 	if err != nil {
+		sb.destroy(ctx, stdout)
 		return &exitError{code: 1, err: err}
 	}
 	defer func() { _ = cleanup() }()
 	state, err := harness.Run(ctx, cfg, deps)
 	if err != nil {
+		sb.keepForResume(stdout)
 		return &exitError{code: 1, err: err}
 	}
 	printSummary(stdout, state)
+	if err := sb.finish(ctx, o, state, stdout); err != nil {
+		return &exitError{code: 1, err: err}
+	}
 	if state.StopReason == adlcv1.StopReason_STOP_REASON_COMPLETED {
 		return nil
 	}

@@ -16,6 +16,7 @@ const (
 	DefaultMaxTokens          = 4096
 	DefaultMaxToolOutputBytes = 16 * 1024
 	DefaultFakeModel          = "fake-model"
+	DefaultSandboxImage       = "golang:1.26"
 )
 
 // Agent is a parsed agent definition.
@@ -31,9 +32,20 @@ type Agent struct {
 	Context            Context      `yaml:"context"`
 	Policy             Policy       `yaml:"policy"`
 	Hooks              []Hook       `yaml:"hooks"`
+	// Sandbox, if set, makes `adlc run` create a sandbox for the run.
+	Sandbox *Sandbox `yaml:"sandbox"`
 
 	// Dir is the directory of the file Load read ("" for Parse). Not in YAML.
 	Dir string `yaml:"-"`
+}
+
+// Sandbox describes the container `adlc run` creates for the agent.
+type Sandbox struct {
+	Image     string  `yaml:"image"`     // default DefaultSandboxImage
+	Workspace string  `yaml:"workspace"` // host dir, relative to the agent file
+	Network   bool    `yaml:"network"`
+	CPUs      float64 `yaml:"cpus"`      // 0 = no limit
+	MemoryMB  int64   `yaml:"memory_mb"` // 0 = no limit
 }
 
 // Model selects and configures the model.
@@ -149,6 +161,9 @@ func (a *Agent) applyDefaults() {
 	}
 	if a.MaxToolOutputBytes == 0 {
 		a.MaxToolOutputBytes = DefaultMaxToolOutputBytes
+	}
+	if a.Sandbox != nil && a.Sandbox.Image == "" {
+		a.Sandbox.Image = DefaultSandboxImage
 	}
 	if a.Model.Provider == "fake" && a.Model.Name == "" {
 		a.Model.Name = DefaultFakeModel
