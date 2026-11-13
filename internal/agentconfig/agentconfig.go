@@ -63,6 +63,15 @@ type Model struct {
 	// Fallbacks are tried in order when the primary fails with a retryable
 	// error (task 1.3). A fallback has no fallbacks of its own.
 	Fallbacks []Model `yaml:"fallbacks"`
+	// Roles is only allowed on the primary model (task Q.5).
+	Roles Roles `yaml:"roles"`
+}
+
+// Roles holds a model per step role (task Q.5). Role "act" (every normal step)
+// always uses the primary model and its fallbacks. A nil entry means the role
+// uses the primary model.
+type Roles struct {
+	Plan *Model `yaml:"plan"` // the planning call (task Q.4)
 }
 
 // Pricing holds USD per million tokens as decimal strings.
@@ -221,13 +230,16 @@ func (a *Agent) resolve() error {
 	for i := range a.Model.Fallbacks {
 		expandModel(&p, fmt.Sprintf("model.fallbacks[%d]", i), &a.Model.Fallbacks[i])
 	}
+	if r := a.Model.Roles.Plan; r != nil {
+		expandModel(&p, "model.roles.plan", r)
+	}
 	a.resolveSystemFile(&p)
 	a.resolvePolicyIncludes(&p)
 	return errors.Join(p...)
 }
 
 // expandModel expands the name and every pricing field of m. path is "model"
-// or "model.fallbacks[i]".
+// "model.fallbacks[i]" or "model.roles.plan".
 func expandModel(p *problems, path string, m *Model) {
 	expandName(p, path+".name", &m.Name)
 	pr := &m.Pricing

@@ -22,7 +22,7 @@ func (l *loop) runPlanCall() error {
 	if err != nil || l.final != nil {
 		return err
 	}
-	resp, err := l.callModel(req, PlanCallID, 0)
+	resp, err := l.callModel(l.planAdapter(), req, PlanCallID, 0)
 	if err != nil || resp == nil {
 		return err
 	}
@@ -39,12 +39,29 @@ func (l *loop) runPlanCall() error {
 // planRequest builds the request of the planning call: the task, then the
 // plan prompt, and no tools. It reads the task from the log, so Resume works.
 func (l *loop) planRequest() *model.Request {
+	id, effort := l.planModel()
 	return &model.Request{
-		Model: l.cfg.Model, System: l.cfg.System, MaxTokens: l.cfg.Plan.MaxTokens, Effort: l.cfg.Effort,
+		Model: id, System: l.cfg.System, MaxTokens: l.cfg.Plan.MaxTokens, Effort: effort,
 		Messages: []model.Message{{Role: model.RoleUser, Parts: []model.Part{
 			model.TextPart(l.r.state.Task), model.TextPart(l.cfg.Plan.Prompt),
 		}}},
 	}
+}
+
+// planAdapter is the adapter of the plan call (task Q.5).
+func (l *loop) planAdapter() model.Adapter {
+	if l.deps.PlanModel != nil {
+		return l.deps.PlanModel
+	}
+	return l.deps.Model
+}
+
+// planModel returns the model id and effort of the plan call.
+func (l *loop) planModel() (id, effort string) {
+	if l.cfg.Plan.Model != "" {
+		return l.cfg.Plan.Model, l.cfg.Plan.Effort
+	}
+	return l.cfg.Model, l.cfg.Effort
 }
 
 // hasPlan reports whether the events hold a completed planning call.
