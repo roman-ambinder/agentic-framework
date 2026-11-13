@@ -41,6 +41,19 @@ jobs:
       - name: lint
         run: make lint
 
+  plugin-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: python hook integration test
+        run: make test-plugin-python
+
   docker:
     runs-on: ubuntu-latest
     steps:
