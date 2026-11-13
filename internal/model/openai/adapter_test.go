@@ -374,6 +374,17 @@ func TestNetworkErrorIsRetryableTimeout(t *testing.T) {
 	}
 }
 
+// A non-network error is not retried. It is tested on classify directly:
+// http.Client wraps any RoundTripper error in a *url.Error, which counts as
+// a network error (same as the Anthropic adapter).
+func TestNonNetworkErrorIsNotRetryableModel(t *testing.T) {
+	err := classify(context.Background(), errors.New("boom: not a network error"))
+	var me *model.Error
+	if !errors.As(err, &me) || me.Class != adlcv1.ErrorClass_ERROR_CLASS_MODEL || me.Retryable {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestCancelledContext(t *testing.T) {
 	f := fixtureAPI(t, "end_turn.json")
 	ctx, cancel := context.WithCancel(context.Background())
