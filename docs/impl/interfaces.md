@@ -843,6 +843,7 @@ const DefaultImage = "golang:1.26"
 // task 1.8: AgentRun, Runner (RunOne, RunAll), Result, Report, WriteReport, PrintTable
 // task 1.9: Check, Grade, Bucket, ProviderSummary, Summary, Summarize
 // task Q.1: Runner.Repeat, Result.Attempt, Report.Repeat, PassAtK, BugAttempts, AgentBucket, AgentSummary, Summary.ByAgent, SummarizeAgents, AgentPair, AgentName, ReportInfo, CompareRow, BugChange, PairComparison, Comparison, BugStatus, Compare, PrintComparison
+// task Q.2: FailureCause and its Cause* constants, FailureCauses, Failure, FailureReport, EventReader, Classify, AnalyzeFailures, PrintFailures
 ```
 
 Exact field lists: briefs E.3, 1.8 and 1.9. Eval results are stored in the
