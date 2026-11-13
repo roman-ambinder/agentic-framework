@@ -162,6 +162,8 @@ version: 1
 model:
   provider: fake
   name: m
+sandbox:
+  workspace: .
 tools:
   - server: shell
     command: ["adlc", "tool", "shell", "--sandbox", "{{sandbox_id}}"]

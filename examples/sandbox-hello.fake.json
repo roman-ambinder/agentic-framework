@@ -1,0 +1,9 @@
+{
+  "turns": [
+    {"text": "I'll write a file.",
+     "tool_calls": [{"id": "call_1", "name": "shell__run", "arguments": {"command": "echo hello from the sandbox > hello.txt"}}],
+     "finish": "tool_use", "usage": {"input_tokens": 50, "output_tokens": 20}},
+    {"text": "Wrote hello.txt.",
+     "finish": "end_turn", "usage": {"input_tokens": 90, "output_tokens": 8}}
+  ]
+}
