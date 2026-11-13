@@ -9,6 +9,34 @@ import (
 	"github.com/roman-ambinder/agentic-framework/internal/model"
 )
 
+// buildParams builds the request parameters shared by Generate and CountTokens.
+func (a *Adapter) buildParams(req *model.Request) (sdk.MessageNewParams, error) {
+	msgs, err := buildMessages(req.Messages)
+	if err != nil {
+		return sdk.MessageNewParams{}, err
+	}
+	tools, err := buildTools(req.Tools)
+	if err != nil {
+		return sdk.MessageNewParams{}, err
+	}
+	eff, err := effort(req.Effort)
+	if err != nil {
+		return sdk.MessageNewParams{}, err
+	}
+	p := sdk.MessageNewParams{Model: req.Model, MaxTokens: int64(req.MaxTokens), Messages: msgs}
+	if req.System != "" {
+		p.System = []sdk.TextBlockParam{{Text: req.System}}
+	}
+	if len(tools) > 0 {
+		p.Tools = tools
+		p.ToolChoice = sdk.ToolChoiceUnionParam{OfAuto: &sdk.ToolChoiceAutoParam{}}
+	}
+	if eff != "" {
+		p.OutputConfig = sdk.OutputConfigParam{Effort: eff}
+	}
+	return p, nil
+}
+
 // buildMessages converts neutral messages to API messages. Blobs of other
 // providers are dropped; messages left empty are skipped.
 func buildMessages(msgs []model.Message) ([]sdk.MessageParam, error) {

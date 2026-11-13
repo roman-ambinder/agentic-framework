@@ -74,3 +74,23 @@ func TestLiveToolCall(t *testing.T) {
 		t.Errorf("finish = %v", resp2.Finish)
 	}
 }
+
+func TestLiveCacheHit(t *testing.T) {
+	a, modelID := liveAdapter(t)
+	para := "The quick brown fox jumps over the lazy dog while the build pipeline runs every test twice. "
+	req := &model.Request{
+		Model: modelID, MaxTokens: 64,
+		System:   "You are a terse assistant. Background notes: " + strings.Repeat(para, 300),
+		Messages: []model.Message{userText("Reply with exactly the word: pong")},
+	}
+	if _, err := a.Generate(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := a.Generate(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Usage.CacheReadTokens <= 0 {
+		t.Errorf("second call usage = %+v, want CacheReadTokens > 0", resp.Usage)
+	}
+}
