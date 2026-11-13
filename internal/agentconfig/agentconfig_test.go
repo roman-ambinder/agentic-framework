@@ -131,6 +131,11 @@ func TestValidateTable(t *testing.T) {
 		{"rule id reserved", baseYAML + "policy:\n  default: deny\n  rules: [{id: default, decision: allow}]\n", `policy.rules[0].id: rule id "default" is reserved`},
 		{"rule risk", baseYAML + "policy:\n  default: deny\n  rules: [{id: x, risk: nope, decision: allow}]\n", `policy.rules[0].risk: unknown risk class "nope"`},
 		{"rule decision", baseYAML + "policy:\n  default: deny\n  rules: [{id: x, decision: nope}]\n", `policy.rules[0].decision: must be one of allow, deny, needs_approval, got "nope"`},
+		{"hook name", baseYAML + "hooks:\n  - {name: Bad, command: [x]}\npolicy: {default: deny}\n", `hooks[0].name: must match`},
+		{"hook name duplicate", baseYAML + "hooks:\n  - {name: a, command: [x]}\n  - {name: a, command: [x]}\npolicy: {default: deny}\n", `hooks[1].name: duplicate hook name "a"`},
+		{"hook command", baseYAML + "hooks:\n  - {name: a, command: []}\npolicy: {default: deny}\n", `hooks[0].command: is required`},
+		{"hook start_timeout", baseYAML + "hooks:\n  - {name: a, command: [x], start_timeout: soon}\npolicy: {default: deny}\n", `hooks[0].start_timeout: "soon" is not a positive duration`},
+		{"hook call_timeout", baseYAML + "hooks:\n  - {name: a, command: [x], call_timeout: 0s}\npolicy: {default: deny}\n", `hooks[0].call_timeout: "0s" is not a positive duration`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -392,5 +397,22 @@ func TestPricingEnvErrors(t *testing.T) {
 				wantErr(t, err, w)
 			}
 		})
+	}
+}
+
+func TestHookPlugins(t *testing.T) {
+	a, err := Parse([]byte(baseYAML + "hooks:\n  - {name: a, command: [x, y], env: {K: v}, start_timeout: 5s, call_timeout: 10s}\n  - {name: b, command: [z]}\npolicy: {default: deny}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := a.HookPlugins()
+	if len(got) != 2 || got[0].Name != "a" || got[1].Name != "b" {
+		t.Fatalf("got %+v", got)
+	}
+	if got[0].StartTimeout != 5*time.Second || got[0].CallTimeout != 10*time.Second || got[0].Env["K"] != "v" || !reflect.DeepEqual(got[0].Command, []string{"x", "y"}) {
+		t.Errorf("hook a = %+v", got[0])
+	}
+	if got[1].StartTimeout != 0 || got[1].CallTimeout != 0 {
+		t.Errorf("hook b = %+v", got[1])
 	}
 }

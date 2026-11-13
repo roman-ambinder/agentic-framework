@@ -2,6 +2,7 @@ package agentconfig
 
 import (
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -10,6 +11,7 @@ import (
 	"github.com/roman-ambinder/agentic-framework/internal/contextmgr"
 	"github.com/roman-ambinder/agentic-framework/internal/model"
 	"github.com/roman-ambinder/agentic-framework/internal/policy"
+	"github.com/roman-ambinder/agentic-framework/internal/sandbox"
 )
 
 // ParsedToolServer is a ToolServer with parsed risk classes.
@@ -20,6 +22,30 @@ type ParsedToolServer struct {
 	Dir         string // = Agent.Dir (commands run in the agent file's directory)
 	Risk        map[string]adlcv1.RiskClass
 	DefaultRisk adlcv1.RiskClass
+}
+
+// ParsedHook is a Hook with parsed durations. Zero durations mean the
+// plugin's defaults.
+type ParsedHook struct {
+	Name         string
+	Command      []string
+	Env          map[string]string
+	Dir          string // = Agent.Dir
+	StartTimeout time.Duration
+	CallTimeout  time.Duration
+}
+
+// HookPlugins returns the declared hooks in file order.
+// Call only after Validate succeeded.
+func (a *Agent) HookPlugins() []ParsedHook {
+	out := make([]ParsedHook, 0, len(a.Hooks))
+	for _, h := range a.Hooks {
+		ph := ParsedHook{Name: h.Name, Command: append([]string(nil), h.Command...), Env: h.Env, Dir: a.Dir}
+		ph.StartTimeout, _ = time.ParseDuration(h.StartTimeout)
+		ph.CallTimeout, _ = time.ParseDuration(h.CallTimeout)
+		out = append(out, ph)
+	}
+	return out
 }
 
 // AgentID returns "<name>@<version>".
@@ -113,4 +139,34 @@ func (a *Agent) ToolServers() []ParsedToolServer {
 		out = append(out, ps)
 	}
 	return out
+}
+
+// SandboxWorkspace returns the sandbox workspace directory, made absolute
+// against the agent file's directory ("" if there is no sandbox section or
+// no workspace).
+func (a *Agent) SandboxWorkspace() string {
+	if a.Sandbox == nil || a.Sandbox.Workspace == "" {
+		return ""
+	}
+	w := a.Sandbox.Workspace
+	if !filepath.IsAbs(w) {
+		w = filepath.Join(a.Dir, w)
+	}
+	return w
+}
+
+// SandboxSpec returns the spec of the sandbox for run runID, and false if the
+// agent has no sandbox section. Call only after Validate succeeded.
+func (a *Agent) SandboxSpec(runID string) (sandbox.Spec, bool) {
+	if a.Sandbox == nil {
+		return sandbox.Spec{}, false
+	}
+	return sandbox.Spec{
+		RunID:        runID,
+		Image:        a.Sandbox.Image,
+		WorkspaceDir: a.SandboxWorkspace(),
+		CPUs:         a.Sandbox.CPUs,
+		MemoryBytes:  a.Sandbox.MemoryMB << 20,
+		Network:      a.Sandbox.Network,
+	}, true
 }

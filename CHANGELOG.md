@@ -1,0 +1,43 @@
+# Changelog
+
+All notable changes. Versions follow the work plan (§7): `v0.1.0` after M0,
+`v0.2.0` after M1.
+
+## Unreleased — proposed v0.2.0
+
+Everything below is merged on `main`. Gates G0 (a real model through the
+loop) and G1 (live eval results) have not been run yet; tag once they have,
+or tag `v0.2.0-rc.1` now.
+
+### Agent loop and state (M0)
+- Append-only SQLite event log with a validated fold to run state and a stable state digest (0.3).
+- Harness: model/tool loop, stop reasons, budgets (steps, tokens, wall clock, cost, tool calls), retries with backoff, pre/post tool hooks, per-step checkpoints (0.5.1–0.5.4).
+- Resume a crashed run from its last checkpoint, verified by a test that kills the process at every event boundary (1.7).
+- Context manager: token budgets, elision of old tool output, stable request prefixes for prompt caching (1.6.1, 1.6.2).
+
+### Models
+- Provider-neutral model types, scripted fake model and an adapter contract suite (0.4).
+- Anthropic adapter with streaming, prompt caching and token counting (0.5b, 1.1); OpenAI adapter (1.2); router with fallback on retryable errors (1.3).
+- Model ids and prices come from environment variables; none are committed.
+
+### Tools, policy and sandbox
+- Static policy rules on risk classes (0.6); tool router and MCP router (0.7.1, 0.7.2); file tools confined with `os.Root` (0.8).
+- Docker sandbox: no network by default, CPU/memory/process limits, non-root user, workspace copied in and out (1.4.1, 1.4.2).
+- Shell, git, search and file tools that run inside the sandbox (1.5).
+- Out-of-process hook plugins over gRPC, with a Python example (0.11.1, 0.11.2).
+
+### Command line
+- `adlc run`, `trace`, `cost`, `resume`, `eval`, `eval-report`, `tool`, `version` (0.9.1, 0.9.2, 0.10, 1.11, 1.7, 1.8, 1.9).
+- `adlc eval --dry-run` reports the worst-case spend before anything runs.
+
+### Evals
+- Ledger fixture project and 10 seeded bugs with hidden tests, checked in CI (E.1–E.3).
+- Eval runner and graders: hidden tests, build, vet and existing tests in a fresh sandbox; pass@1 per difficulty and provider (1.8, 1.9).
+- Coder agent files and a manual GitHub Actions workflow for live evals with a spend limit (1.10, offline part).
+
+### Security
+- Changed files after an eval run are computed with the host-side git directory, so a `.git/config` planted by an agent cannot run programs on the host.
+
+### Build
+- Go 1.26 (toolchain go1.26.11); all developer tools pinned in `tooling/go.mod` (0.0).
+- CI: tests with the race detector, lint, protobuf compatibility, Docker tests, Python plugin test and the seeded-bug self-check.

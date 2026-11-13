@@ -262,6 +262,17 @@ func TestExampleFilesLoad(t *testing.T) {
 	if err != nil || len(turns) != 2 {
 		t.Fatalf("turns = %d, err = %v", len(turns), err)
 	}
+	sb, err := agentconfig.Load("../../examples/sandbox-hello.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := sb.SandboxSpec("r"); !ok {
+		t.Error("sandbox-hello.yaml has no sandbox")
+	}
+	turns, err = model.LoadFakeScript("../../examples/sandbox-hello.fake.json")
+	if err != nil || len(turns) != 2 {
+		t.Fatalf("sandbox turns = %d, err = %v", len(turns), err)
+	}
 }
 
 func TestModelNameFlagReplacesUnsetVariable(t *testing.T) {

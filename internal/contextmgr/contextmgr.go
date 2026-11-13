@@ -58,10 +58,10 @@ func Build(ctx context.Context, req *model.Request, b Budget) (*model.Request, S
 	return out, st, err
 }
 
-// build is Build with the elisions of earlier steps. Every tool result whose
-// CallID is in elided is replaced by its placeholder first, without being
-// counted in Stats. It returns the CallIDs elided by this call, oldest first.
-func build(ctx context.Context, req *model.Request, b Budget, elided map[string]bool) (*model.Request, Stats, []string, error) {
+// build is Build with the elisions of earlier steps. Every tool result at a
+// location in elided is replaced by its placeholder first, without being
+// counted in Stats. It returns the locations elided by this call, oldest first.
+func build(ctx context.Context, req *model.Request, b Budget, elided map[location]bool) (*model.Request, Stats, []location, error) {
 	ratio, err := lowWaterRatio(b)
 	if err != nil {
 		return nil, Stats{}, nil, err
@@ -76,11 +76,11 @@ func build(ctx context.Context, req *model.Request, b Budget, elided map[string]
 		return out, Stats{EstimatedTokens: est}, nil, nil
 	}
 	target := int64(float64(b.MaxInputTokens) * ratio)
-	var newly []string
+	var newly []location
 	for _, loc := range elidable(out.Messages, protectedFrom(out.Messages, keepSteps(b))) {
 		tr := out.Messages[loc.msg].Parts[loc.part].ToolResult
 		est += elideResult(tr)
-		newly = append(newly, tr.CallID)
+		newly = append(newly, loc)
 		if est > target {
 			continue
 		}
@@ -159,6 +159,9 @@ func protectedFrom(msgs []model.Message, keep int) int {
 	return 0
 }
 
+// location is the position of a part in the request: message index, then part
+// index. Messages are only appended, so a location names the same part on
+// every later step.
 type location struct{ msg, part int }
 
 // elidable lists, oldest first, the tool results that may still be elided:
@@ -187,15 +190,15 @@ func elideResult(tr *model.ToolResult) int64 {
 	return delta
 }
 
-// applyElisions replaces the content of every tool result whose CallID is in
+// applyElisions replaces the content of every tool result at a location in
 // elided. It works on a copy made by deepCopy, so the input is not changed.
-func applyElisions(msgs []model.Message, elided map[string]bool) {
+func applyElisions(msgs []model.Message, elided map[location]bool) {
 	if len(elided) == 0 {
 		return
 	}
-	for _, m := range msgs {
-		for _, p := range m.Parts {
-			if p.ToolResult != nil && elided[p.ToolResult.CallID] && !strings.HasPrefix(p.ToolResult.Content, elidedPrefix) {
+	for i := range msgs {
+		for j, p := range msgs[i].Parts {
+			if p.ToolResult != nil && elided[location{i, j}] && !strings.HasPrefix(p.ToolResult.Content, elidedPrefix) {
 				p.ToolResult.Content = placeholderFor(p.ToolResult.Content)
 			}
 		}

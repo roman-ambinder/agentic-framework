@@ -16,6 +16,23 @@ does not depend on Go.
 Exit codes: 2 for a missing socket variable or an invalid pattern, 1 if the
 socket cannot be opened.
 
+## Use in an agent file
+
+Declare the plugin under `hooks:` in `agent.yaml`. `adlc run` and
+`adlc resume` start it before the run and stop it when the command returns.
+
+```yaml
+hooks:
+  - name: deny-writes
+    command: ["python3", "hook_plugin.py"]   # runs in the agent file's directory
+    env: {ADLC_HOOK_DENY_PATTERN: "fs__write_.*"}
+    start_timeout: 5s    # optional
+    call_timeout: 10s    # optional
+```
+
+Hooks run in the order listed. If a hook fails to start, the command exits 1
+with `run: hook <name>: <error>` and no run is started.
+
 ## Setup
 
 ```

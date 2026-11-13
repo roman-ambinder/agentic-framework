@@ -3,12 +3,14 @@ package agentconfig
 import (
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/roman-ambinder/agentic-framework/internal/policy"
+	"github.com/roman-ambinder/agentic-framework/internal/sandbox"
 )
 
 type problems []error
@@ -39,9 +41,11 @@ func (a *Agent) Validate() error {
 		p.add("max_tool_output_bytes", "must be between 1 and 10485760")
 	}
 	a.validateTools(&p)
+	a.validateSandbox(&p)
 	a.validateBudget(&p)
 	a.validateContext(&p)
 	a.validatePolicy(&p)
+	a.validateHooks(&p)
 	return errors.Join(p...)
 }
 
@@ -185,5 +189,66 @@ func (a *Agent) validatePolicy(p *problems) {
 		if _, err := policy.ParseDecision(r.Decision); err != nil {
 			p.add(path+".decision", "must be one of allow, deny, needs_approval, got %q", r.Decision)
 		}
+	}
+}
+
+var hookNameRE = regexp.MustCompile(`^[a-z0-9-]{1,40}$`)
+
+func (a *Agent) validateHooks(p *problems) {
+	seen := map[string]bool{}
+	for i, h := range a.Hooks {
+		path := fmt.Sprintf("hooks[%d]", i)
+		switch {
+		case !hookNameRE.MatchString(h.Name):
+			p.add(path+".name", "must match ^[a-z0-9-]{1,40}$, got %q", h.Name)
+		case seen[h.Name]:
+			p.add(path+".name", "duplicate hook name %q", h.Name)
+		}
+		seen[h.Name] = true
+		if len(h.Command) == 0 || h.Command[0] == "" {
+			p.add(path+".command", "is required")
+		}
+		for _, d := range []struct{ field, val string }{
+			{"start_timeout", h.StartTimeout}, {"call_timeout", h.CallTimeout},
+		} {
+			if d.val == "" {
+				continue
+			}
+			if v, err := time.ParseDuration(d.val); err != nil || v <= 0 {
+				p.add(path+"."+d.field, "%q is not a positive duration", d.val)
+			}
+		}
+	}
+}
+
+// validateSandbox checks the sandbox section and that {{sandbox_id}} is only
+// used when the section exists.
+func (a *Agent) validateSandbox(p *problems) {
+	if sb := a.Sandbox; sb != nil {
+		validateSandboxFields(p, a.SandboxWorkspace(), *sb)
+		return
+	}
+	for i, t := range a.Tools {
+		for _, arg := range t.Command {
+			if strings.Contains(arg, sandbox.SandboxIDPlaceholder) {
+				p.add(fmt.Sprintf("tools[%d].command", i),
+					"uses %s but the agent has no sandbox section", sandbox.SandboxIDPlaceholder)
+				break
+			}
+		}
+	}
+}
+
+func validateSandboxFields(p *problems, workspace string, sb Sandbox) {
+	if sb.Workspace == "" {
+		p.add("sandbox.workspace", "is required")
+	} else if fi, err := os.Stat(workspace); err != nil || !fi.IsDir() {
+		p.add("sandbox.workspace", "%q is not an existing directory", workspace)
+	}
+	if sb.CPUs < 0 {
+		p.add("sandbox.cpus", "must be >= 0, got %v", sb.CPUs)
+	}
+	if sb.MemoryMB < 0 {
+		p.add("sandbox.memory_mb", "must be >= 0, got %d", sb.MemoryMB)
 	}
 }
