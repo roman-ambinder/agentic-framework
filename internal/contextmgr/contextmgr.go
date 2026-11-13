@@ -17,6 +17,9 @@ import (
 // defaultKeepRecentSteps is Budget.KeepRecentSteps when it is zero.
 const defaultKeepRecentSteps = 2
 
+// defaultLowWaterRatio is Budget.LowWaterRatio when it is zero.
+const defaultLowWaterRatio = 0.7
+
 // elidedPrefix starts every placeholder; a result that starts with it is
 // never elided again.
 const elidedPrefix = "[tool output elided:"
@@ -29,6 +32,9 @@ type Budget struct {
 	// KeepRecentSteps is how many of the latest assistant messages (and
 	// the tool results answering them) are never elided. 0 means 2.
 	KeepRecentSteps int
+	// LowWaterRatio: when eliding, keep going until the estimate is at or
+	// below MaxInputTokens * LowWaterRatio. 0 means 0.7. Must be in (0, 1].
+	LowWaterRatio float64
 	// Count, if set, gives an exact token count. It is called only when
 	// the estimate is within 10% of MaxInputTokens.
 	Count func(ctx context.Context, req *model.Request) (int64, error)
@@ -48,35 +54,62 @@ var ErrContextTooLarge = errors.New("contextmgr: context budget exceeded")
 // never modified. When the request cannot be made to fit, the compacted copy
 // is returned together with an error wrapping ErrContextTooLarge.
 func Build(ctx context.Context, req *model.Request, b Budget) (*model.Request, Stats, error) {
+	out, st, _, err := build(ctx, req, b, nil)
+	return out, st, err
+}
+
+// build is Build with the elisions of earlier steps. Every tool result whose
+// CallID is in elided is replaced by its placeholder first, without being
+// counted in Stats. It returns the CallIDs elided by this call, oldest first.
+func build(ctx context.Context, req *model.Request, b Budget, elided map[string]bool) (*model.Request, Stats, []string, error) {
+	ratio, err := lowWaterRatio(b)
+	if err != nil {
+		return nil, Stats{}, nil, err
+	}
 	out := deepCopy(req)
+	applyElisions(out.Messages, elided)
 	est := EstimateRequest(out)
 	if b.MaxInputTokens == 0 {
-		return out, Stats{EstimatedTokens: est}, nil
+		return out, Stats{EstimatedTokens: est}, nil, nil
 	}
-	fit, n, counted := fits(ctx, out, est, b)
-	if fit {
-		return out, Stats{EstimatedTokens: est}, nil
+	if fit, _, _ := fits(ctx, out, est, b); fit {
+		return out, Stats{EstimatedTokens: est}, nil, nil
 	}
-	elided := 0
+	target := int64(float64(b.MaxInputTokens) * ratio)
+	var newly []string
 	for _, loc := range elidable(out.Messages, protectedFrom(out.Messages, keepSteps(b))) {
 		tr := out.Messages[loc.msg].Parts[loc.part].ToolResult
-		placeholder := placeholderFor(tr.Content)
-		est += EstimateTokens(placeholder) - EstimateTokens(tr.Content)
-		tr.Content = placeholder
-		elided++
-		counted = false
-		if est > b.MaxInputTokens {
+		est += elideResult(tr)
+		newly = append(newly, tr.CallID)
+		if est > target {
 			continue
 		}
-		if fit, n, counted = fits(ctx, out, est, b); fit {
-			return out, Stats{EstimatedTokens: est, ElidedResults: elided}, nil
+		if fit, _, _ := fits(ctx, out, est, b); fit {
+			return out, Stats{EstimatedTokens: est, ElidedResults: len(newly)}, newly, nil
 		}
 	}
-	stats := Stats{EstimatedTokens: est, ElidedResults: elided}
+	stats := Stats{EstimatedTokens: est, ElidedResults: len(newly)}
+	fit, n, counted := fits(ctx, out, est, b)
+	if fit {
+		return out, stats, newly, nil
+	}
 	if !counted {
 		n = est
 	}
-	return out, stats, fmt.Errorf("%w: needs about %d tokens, budget is %d", ErrContextTooLarge, n, b.MaxInputTokens)
+	return out, stats, newly, fmt.Errorf("%w: needs about %d tokens, budget is %d", ErrContextTooLarge, n, b.MaxInputTokens)
+}
+
+// lowWaterRatio returns the effective LowWaterRatio, or an error when it is
+// outside (0, 1].
+func lowWaterRatio(b Budget) (float64, error) {
+	r := b.LowWaterRatio
+	if r == 0 {
+		return defaultLowWaterRatio, nil
+	}
+	if !(r > 0 && r <= 1) {
+		return 0, fmt.Errorf("contextmgr: LowWaterRatio %v must be in (0, 1]", r)
+	}
+	return r, nil
 }
 
 func keepSteps(b Budget) int {
@@ -136,12 +169,38 @@ func elidable(msgs []model.Message, protectedFrom int) []location {
 	return out
 }
 
+// elideResult replaces the content of tr with its placeholder and returns the
+// change in estimated tokens.
+func elideResult(tr *model.ToolResult) int64 {
+	placeholder := placeholderFor(tr.Content)
+	delta := EstimateTokens(placeholder) - EstimateTokens(tr.Content)
+	tr.Content = placeholder
+	return delta
+}
+
+// applyElisions replaces the content of every tool result whose CallID is in
+// elided. It works on a copy made by deepCopy, so the input is not changed.
+func applyElisions(msgs []model.Message, elided map[string]bool) {
+	if len(elided) == 0 {
+		return
+	}
+	for _, m := range msgs {
+		for _, p := range m.Parts {
+			if p.ToolResult != nil && elided[p.ToolResult.CallID] && !strings.HasPrefix(p.ToolResult.Content, elidedPrefix) {
+				p.ToolResult.Content = placeholderFor(p.ToolResult.Content)
+			}
+		}
+	}
+}
+
 // worthEliding reports whether replacing content with its placeholder makes
 // the request smaller: not already elided, and longer than the placeholder.
 func worthEliding(content string) bool {
 	return !strings.HasPrefix(content, elidedPrefix) && len(placeholderFor(content)) < len(content)
 }
 
+// placeholderFor depends only on the length of the original content, so every
+// step writes the same bytes for the same elided result.
 func placeholderFor(content string) string {
 	return fmt.Sprintf("[tool output elided: %d bytes; call the tool again if you need it]", len(content))
 }

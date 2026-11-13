@@ -68,7 +68,7 @@ func budgetEliding(req *model.Request, n int) int64 {
 
 func TestBuildElidesOldestFirst(t *testing.T) {
 	req := transcript(6, 4000)
-	got, st, err := Build(context.Background(), req, Budget{MaxInputTokens: budgetEliding(req, 2)})
+	got, st, err := Build(context.Background(), req, Budget{LowWaterRatio: 1, MaxInputTokens: budgetEliding(req, 2)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestBuildElidesOldestFirst(t *testing.T) {
 
 func TestBuildPlaceholderText(t *testing.T) {
 	req := transcript(6, 4000)
-	got, _, err := Build(context.Background(), req, Budget{MaxInputTokens: budgetEliding(req, 1)})
+	got, _, err := Build(context.Background(), req, Budget{LowWaterRatio: 1, MaxInputTokens: budgetEliding(req, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestBuildKeepRecentStepsSetting(t *testing.T) {
 func TestBuildKeepsPairing(t *testing.T) {
 	req := transcript(6, 4000)
 	req.Messages[2].Parts[0].ToolResult.IsError = true
-	got, _, err := Build(context.Background(), req, Budget{MaxInputTokens: budgetEliding(req, 3)})
+	got, _, err := Build(context.Background(), req, Budget{LowWaterRatio: 1, MaxInputTokens: budgetEliding(req, 3)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestBuildKeepsPairing(t *testing.T) {
 func TestBuildDoesNotModifyInput(t *testing.T) {
 	req := transcript(6, 4000)
 	before := transcript(6, 4000)
-	if _, _, err := Build(context.Background(), req, Budget{MaxInputTokens: budgetEliding(req, 3)}); err != nil {
+	if _, _, err := Build(context.Background(), req, Budget{LowWaterRatio: 1, MaxInputTokens: budgetEliding(req, 3)}); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(req, before) {
@@ -177,7 +177,7 @@ func TestBuildDoesNotModifyInput(t *testing.T) {
 
 func TestBuildDoesNotElideTwice(t *testing.T) {
 	req := transcript(6, 4000)
-	b := Budget{MaxInputTokens: budgetEliding(req, 2)}
+	b := Budget{LowWaterRatio: 1, MaxInputTokens: budgetEliding(req, 2)}
 	first, _, err := Build(context.Background(), req, b)
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +192,7 @@ func TestBuildUsesCountNearLimit(t *testing.T) {
 	req := transcript(6, 4000)
 	max := EstimateRequest(req) // estimate fits, and is within 10% of the budget
 	calls := 0
-	b := Budget{MaxInputTokens: max, Count: func(_ context.Context, r *model.Request) (int64, error) {
+	b := Budget{LowWaterRatio: 1, MaxInputTokens: max, Count: func(_ context.Context, r *model.Request) (int64, error) {
 		calls++
 		if resultContent(r, 0) == placeholder {
 			return max, nil // fits once one result is elided
@@ -247,11 +247,11 @@ func TestBuildCountSaysTooLargeAfterEliding(t *testing.T) {
 
 func TestBuildSkipsAlreadyElidedResults(t *testing.T) {
 	req := transcript(6, 4000)
-	first, _, err := Build(context.Background(), req, Budget{MaxInputTokens: budgetEliding(req, 2)})
+	first, _, err := Build(context.Background(), req, Budget{LowWaterRatio: 1, MaxInputTokens: budgetEliding(req, 2)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, st, err := Build(context.Background(), first, Budget{MaxInputTokens: budgetEliding(req, 3)})
+	second, st, err := Build(context.Background(), first, Budget{LowWaterRatio: 1, MaxInputTokens: budgetEliding(req, 3)})
 	if err != nil || st.ElidedResults != 1 {
 		t.Fatalf("err=%v stats=%+v", err, st)
 	}
