@@ -324,3 +324,71 @@ func TestFallbackPricesPrimaryWinsOnSharedName(t *testing.T) {
 		t.Errorf("Prices[shared].InputPerMTok = %d, want the primary's 3000000", got)
 	}
 }
+
+const pricingEnvYAML = `name: a
+version: 1
+model:
+  provider: anthropic
+  name: m
+  pricing:
+    input_per_mtok: ${ADLC_TEST_PRICE_IN}
+    output_per_mtok: "15"
+    cache_read_per_mtok: ${ADLC_TEST_PRICE_CR}
+  fallbacks:
+    - provider: openai
+      name: f
+      pricing:
+        input_per_mtok: ${ADLC_TEST_PRICE_IN}
+policy: {default: deny}
+`
+
+func TestPricingFromEnv(t *testing.T) {
+	t.Setenv("ADLC_TEST_PRICE_IN", "3.50")
+	t.Setenv("ADLC_TEST_PRICE_CR", "0.35")
+	a, err := Parse([]byte(pricingEnvYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := model.Price{InputPerMTok: 3_500_000, OutputPerMTok: 15_000_000, CacheReadPerMTok: 350_000}
+	if got := a.Price(); got != want {
+		t.Errorf("Price() = %+v, want %+v", got, want)
+	}
+	if got := a.Prices()["f"].InputPerMTok; got != 3_500_000 {
+		t.Errorf("fallback input price = %d, want 3500000", got)
+	}
+}
+
+func TestPricingEnvErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want []string
+	}{
+		{"unset", nil, []string{
+			"model.pricing.input_per_mtok: environment variable ADLC_TEST_PRICE_IN is not set",
+			"model.pricing.cache_read_per_mtok: environment variable ADLC_TEST_PRICE_CR is not set",
+			"model.fallbacks[0].pricing.input_per_mtok: environment variable ADLC_TEST_PRICE_IN is not set",
+		}},
+		{
+			"empty counts as unset",
+			map[string]string{"ADLC_TEST_PRICE_IN": "", "ADLC_TEST_PRICE_CR": "1"},
+			[]string{"model.pricing.input_per_mtok: environment variable ADLC_TEST_PRICE_IN is not set"},
+		},
+		{
+			"expanded value is validated",
+			map[string]string{"ADLC_TEST_PRICE_IN": "abc", "ADLC_TEST_PRICE_CR": "1"},
+			[]string{`model.pricing.input_per_mtok: "abc" is not a decimal amount`},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			_, err := Parse([]byte(pricingEnvYAML))
+			for _, w := range tt.want {
+				wantErr(t, err, w)
+			}
+		})
+	}
+}

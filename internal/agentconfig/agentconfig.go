@@ -151,18 +151,30 @@ func (a *Agent) applyDefaults() {
 
 var envNameRE = regexp.MustCompile(`^\$\{([A-Z_][A-Z0-9_]*)\}$`)
 
-// resolve expands model names from the environment and loads system_file.
+// resolve expands model names and prices from the environment and loads
+// system_file.
 func (a *Agent) resolve() error {
 	var p problems
-	expandName(&p, "model.name", &a.Model.Name)
+	expandModel(&p, "model", &a.Model)
 	for i := range a.Model.Fallbacks {
-		expandName(&p, fmt.Sprintf("model.fallbacks[%d].name", i), &a.Model.Fallbacks[i].Name)
+		expandModel(&p, fmt.Sprintf("model.fallbacks[%d]", i), &a.Model.Fallbacks[i])
 	}
 	a.resolveSystemFile(&p)
 	return errors.Join(p...)
 }
 
-// expandName replaces a name that is exactly ${VAR} with the variable's value.
+// expandModel expands the name and every pricing field of m. path is "model"
+// or "model.fallbacks[i]".
+func expandModel(p *problems, path string, m *Model) {
+	expandName(p, path+".name", &m.Name)
+	pr := &m.Pricing
+	expandName(p, path+".pricing.input_per_mtok", &pr.InputPerMTok)
+	expandName(p, path+".pricing.output_per_mtok", &pr.OutputPerMTok)
+	expandName(p, path+".pricing.cache_read_per_mtok", &pr.CacheReadPerMTok)
+	expandName(p, path+".pricing.cache_write_per_mtok", &pr.CacheWritePerMTok)
+}
+
+// expandName replaces a value that is exactly ${VAR} with the variable's value.
 func expandName(p *problems, path string, name *string) {
 	m := envNameRE.FindStringSubmatch(*name)
 	if m == nil {

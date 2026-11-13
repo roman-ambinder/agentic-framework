@@ -1,0 +1,29 @@
+name: coder-openai
+version: 1
+system_file: coder.prompt.md          # relative to this file
+model:
+  provider: openai
+  name: ${ADLC_OPENAI_MODEL}       # set in your shell or as a repository variable; not committed
+  max_tokens: 16000
+  effort: high
+  # Prices are USD per million tokens as decimal strings (for example "3.00").
+  # They depend on the model you choose, so they are not committed: set the
+  # ADLC_OPENAI_PRICE_* environment variables (locally in your shell, in GitHub
+  # as repository variables). See docs/impl/live-eval.md.
+  pricing:
+    input_per_mtok: ${ADLC_OPENAI_PRICE_INPUT}
+    output_per_mtok: ${ADLC_OPENAI_PRICE_OUTPUT}
+    cache_read_per_mtok: ${ADLC_OPENAI_PRICE_CACHE_READ}
+    cache_write_per_mtok: ${ADLC_OPENAI_PRICE_CACHE_WRITE}
+budget:
+  max_steps: 60
+  max_tokens: 3000000
+  max_wall_clock: 20m
+  max_usd: "2.00"
+  max_tool_calls: 150
+policy:
+  default: deny
+  rules:
+    - {id: read,  risk: read,        decision: allow}
+    - {id: write, risk: write_local, decision: allow}
+    - {id: exec,  risk: exec,        decision: allow}
