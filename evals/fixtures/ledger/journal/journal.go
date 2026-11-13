@@ -61,7 +61,7 @@ func New(reg *account.Registry) *Journal {
 // at least 2 postings; every account exists, is open, and has the posting's currency;
 // for each currency the posting amounts sum to zero.
 func (j *Journal) Post(date time.Time, memo string, postings ...Posting) (Entry, error) {
-	if err := j.validate(postings); err != nil {
+	if err := j.validate(postings, true); err != nil {
 		return Entry{}, err
 	}
 	return j.append(date, memo, postings, 0), nil
@@ -100,15 +100,17 @@ func (j *Journal) Reverse(id int, date time.Time) (Entry, error) {
 	for i, p := range orig.Postings {
 		negated[i] = Posting{Account: p.Account, Amount: p.Amount.Neg()}
 	}
-	if err := j.validate(negated); err != nil {
+	if err := j.validate(negated, true); err != nil {
 		return Entry{}, err
 	}
 	memo := fmt.Sprintf("Reversal of #%d: %s", id, orig.Memo)
 	return j.append(date, memo, negated, id), nil
 }
 
-// validate applies the posting rules from Post.
-func (j *Journal) validate(postings []Posting) error {
+// validate applies the posting rules from Post. requireOpen is false when
+// loading saved entries: history posted while an account was open must still
+// load after the account is closed.
+func (j *Journal) validate(postings []Posting, requireOpen bool) error {
 	if len(postings) < 2 {
 		return ErrTooFewPostings
 	}
@@ -117,7 +119,7 @@ func (j *Journal) validate(postings []Posting) error {
 		switch {
 		case !ok:
 			return fmt.Errorf("%w: %q", ErrUnknownAccount, p.Account)
-		case acc.Closed:
+		case requireOpen && acc.Closed:
 			return fmt.Errorf("%w: %q", ErrClosedAccount, p.Account)
 		case p.Amount.Currency != acc.Currency:
 			return fmt.Errorf("%w: %q is %s, posting is %s", ErrWrongCurrency, p.Account, acc.Currency, p.Amount.Currency)

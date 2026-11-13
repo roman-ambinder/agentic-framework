@@ -148,3 +148,28 @@ func TestLoadRejectsReversalOfLaterEntry(t *testing.T) {
 		t.Errorf("Load of self-reversal error = %v, want a reversal error", err)
 	}
 }
+
+// History posted while an account was open must still load after it is closed;
+// only new postings to a closed account are refused.
+func TestLoadAcceptsEntriesForClosedAccount(t *testing.T) {
+	reg := testRegistry(t)
+	j := New(reg)
+	mustPost(t, j, march(1), "sale", sale(5000)...)
+	var buf bytes.Buffer
+	if err := j.Save(&buf); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := reg.Close("income:sales"); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	loaded, err := Load(&buf, reg)
+	if err != nil {
+		t.Fatalf("Load after closing an account: %v", err)
+	}
+	if !sameEntries(loaded.Entries(), j.Entries()) {
+		t.Errorf("loaded entries differ:\n got %+v\nwant %+v", loaded.Entries(), j.Entries())
+	}
+	if _, err := loaded.Post(march(2), "late sale", sale(100)...); !errors.Is(err, ErrClosedAccount) {
+		t.Errorf("Post to closed account: err = %v, want ErrClosedAccount", err)
+	}
+}

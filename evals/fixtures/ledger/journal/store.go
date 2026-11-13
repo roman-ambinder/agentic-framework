@@ -95,7 +95,7 @@ func (j *Journal) loadEntry(fe fileEntry) error {
 		}
 		postings = append(postings, Posting{Account: p.Account, Amount: amt})
 	}
-	if err := j.validate(postings); err != nil {
+	if err := j.validate(postings, false); err != nil {
 		return fmt.Errorf("journal: load: entry %d: %w", fe.ID, err)
 	}
 	if fe.Reverses != 0 {
