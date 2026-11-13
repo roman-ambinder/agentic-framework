@@ -11,7 +11,7 @@ Status: early development (milestone M0).
 
 ## Development
 
-Requires Go 1.24+ and golangci-lint v2.
+Requires Go 1.21 or newer; `make` downloads Go 1.26.11 and all tools on first use.
 
 ```bash
 make build        # bin/adlc

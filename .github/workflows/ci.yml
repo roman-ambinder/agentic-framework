@@ -36,9 +36,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v8
-        with:
-          version: v2.5.0
+      - name: lint
+        run: make lint
 
   # Fails a pull request that breaks compatibility of the contracts with its base branch.
   proto-breaking:

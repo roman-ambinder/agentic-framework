@@ -142,7 +142,7 @@ Set the numeric thresholds after E.4, once the suite's difficulty is known.
 - **Security of the sandbox:** network off by default, no host credentials mounted, changes leave only as a diff. Review this at the end of M1 before any write-external tool exists.
 - **Releases:** tag `v0.1.0` after M0, `v0.2.0` after M1; changelog from PR titles.
 - **Docs:** each milestone updates the design doc where reality differs from it.
-- **Go version:** decided — move to Go 1.26 (task 0.0). Go 1.24 held back `buf`, `modernc.org/sqlite`, OpenTelemetry and gRPC, and no release of the Anthropic Go SDK v2 supports it.
+- **Go version:** the repo targets Go 1.26 (toolchain go1.26.11, task 0.0). Tools are pinned in `tooling/go.mod`.
 
 ## 8. Decision log
 
