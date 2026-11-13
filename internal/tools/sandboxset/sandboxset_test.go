@@ -3,6 +3,7 @@ package sandboxset_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -70,5 +71,41 @@ func TestServerConfigsCommand(t *testing.T) {
 	sort.Strings(names)
 	if want := []string{"files", "git", "search", "shell"}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("names = %v, want %v", names, want)
+	}
+}
+
+// TestCoderPromptListsRouterTools checks that the coder prompt lists exactly
+// the tools the router exposes, each with the first sentence of its description.
+func TestCoderPromptListsRouterTools(t *testing.T) {
+	ctx := context.Background()
+	host := sandboxtest.NewHost(t.TempDir())
+	h, err := host.Create(ctx, sandbox.Spec{RunID: "t", Image: "host"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := sandboxset.NewRouter(ctx, sandboxtool.Options{Sandbox: host, Handle: h})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	prompt, err := os.ReadFile("../../../agents/sdlc/coder.prompt.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listed []string
+	for _, line := range strings.Split(string(prompt), "\n") {
+		if strings.HasPrefix(line, "- ") && strings.Contains(line, "__") {
+			listed = append(listed, line)
+		}
+	}
+	var want []string
+	for _, tool := range r.Tools() {
+		first, _, _ := strings.Cut(tool.Spec.Description, ". ")
+		want = append(want, "- "+tool.Spec.Name+": "+strings.TrimSuffix(first, ".")+".")
+	}
+	sort.Strings(listed)
+	sort.Strings(want)
+	if !reflect.DeepEqual(listed, want) {
+		t.Fatalf("prompt tool lines:\n%q\nwant:\n%q", listed, want)
 	}
 }
