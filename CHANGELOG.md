@@ -3,6 +3,19 @@
 All notable changes. Versions follow the work plan (§7): `v0.1.0` after M0,
 `v0.2.0` after M1.
 
+## Unreleased — M2-C (control plane) and part of M2-Q
+
+On `integration`, not yet on `main`.
+
+### Control plane (C.1–C.4)
+- `adlc approvals` lists runs waiting for an approval; `adlc approve` answers one (`--reject`, `--comment`, `--by`) and continues the run in place when no approval is left (C.1).
+- Policy rules match tool-name globs and arguments (glob, prefix, regex, list of values); agent files include shared policy files with `policy.include`; `adlc policy check` shows which rule decides a call (C.2).
+- Control database `.adlc/control.db`; `adlc kill run|agent`, `adlc unkill`, `adlc kills`. A killed run stops before its next model or tool call, including an approved call (C.3).
+- Agent registry: `adlc agent register|list|show|promote`; versions are immutable and content-addressed; promotion to staging or prod needs an eval report for that exact version that meets the pass@1 and cost thresholds; `run`, `resume` and `approve` accept `NAME@N` and `NAME@ENV` (C.4).
+
+### Evals (Q.1, Q.2)
+- `adlc eval --repeat N`, pass@k, `adlc eval-compare`; `adlc eval-report --failures` names the top failure causes.
+
 ## Unreleased — proposed v0.2.0
 
 Everything below is merged on `main`. Gates G0 (a real model through the
