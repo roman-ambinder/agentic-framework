@@ -10,6 +10,7 @@ import (
 	"github.com/roman-ambinder/agentic-framework/internal/harness"
 	"github.com/roman-ambinder/agentic-framework/internal/model"
 	"github.com/roman-ambinder/agentic-framework/internal/model/anthropic"
+	"github.com/roman-ambinder/agentic-framework/internal/model/openai"
 	"github.com/roman-ambinder/agentic-framework/internal/toolrouter"
 	"github.com/roman-ambinder/agentic-framework/internal/toolrouter/mcprouter"
 )
@@ -60,7 +61,10 @@ func buildModel(a *agentconfig.Agent, fakeScript string) (model.Adapter, error) 
 		}
 		return anthropic.New(anthropic.Options{}), nil
 	case "openai":
-		return nil, errors.New("run: provider openai is not wired yet (task 1.2)")
+		if fakeScript != "" {
+			return nil, errors.New("run: --fake-script only works with provider fake")
+		}
+		return openai.New(openai.Config{})
 	default:
 		return nil, fmt.Errorf("run: unsupported provider %q", p)
 	}

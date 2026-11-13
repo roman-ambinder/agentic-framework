@@ -61,13 +61,20 @@ func TestBuildModelScriptOnlyForFake(t *testing.T) {
 	}
 }
 
-func TestBuildModelAnthropicAndOpenAI(t *testing.T) {
+func TestBuildModelAnthropic(t *testing.T) {
 	m, err := buildModel(agentWithProvider(t, "anthropic"), "")
 	if err != nil || m.Provider() != "anthropic" {
 		t.Fatalf("m = %v, err = %v", m, err)
 	}
-	_, err = buildModel(agentWithProvider(t, "openai"), "")
-	if err == nil || !strings.Contains(err.Error(), "not wired yet") {
+}
+
+func TestBuildModelOpenAI(t *testing.T) {
+	m, err := buildModel(agentWithProvider(t, "openai"), "")
+	if err != nil || m.Provider() != "openai" {
+		t.Fatalf("m = %v, err = %v", m, err)
+	}
+	_, err = buildModel(agentWithProvider(t, "openai"), "x.json")
+	if err == nil || err.Error() != "run: --fake-script only works with provider fake" {
 		t.Fatalf("err = %v", err)
 	}
 }
