@@ -31,6 +31,7 @@ type Agent struct {
 	Tools              []ToolServer `yaml:"tools"`
 	Budget             Budget       `yaml:"budget"`
 	Context            Context      `yaml:"context"`
+	Planning           Planning     `yaml:"planning"`
 	Policy             Policy       `yaml:"policy"`
 	Hooks              []Hook       `yaml:"hooks"`
 	// Sandbox, if set, makes `adlc run` create a sandbox for the run.
@@ -104,6 +105,13 @@ type Budget struct {
 type Context struct {
 	MaxInputTokens  int64 `yaml:"max_input_tokens"`  // 0 = derived from the model
 	KeepRecentSteps int   `yaml:"keep_recent_steps"` // 0 = 2
+}
+
+// Planning configures the optional planning call (task Q.4). Off by default.
+type Planning struct {
+	Enabled   bool   `yaml:"enabled"`
+	Prompt    string `yaml:"prompt"`     // "" = the harness default
+	MaxTokens int    `yaml:"max_tokens"` // 0 = the harness default
 }
 
 // Policy is the agent's policy: a default decision, included policy files and ordered rules.

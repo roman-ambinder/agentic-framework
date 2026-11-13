@@ -35,6 +35,10 @@ budget:                           # optional; 0 or missing = no limit
 context:                          # optional; limits the size of each model request
   max_input_tokens: 150000        # optional; >= 0; default derived from the model (80% of its window)
   keep_recent_steps: 2            # optional; >= 0; default 2
+planning:                         # optional; omitted = no planning call before step 1
+  enabled: false                  # default false
+  prompt: ""                      # optional; "" = the harness default plan prompt
+  max_tokens: 0                   # optional; 0 = harness default (1024); 0..1000000
 policy:
   default: deny                   # required; allow, deny, needs_approval
   rules:                          # optional; first match wins

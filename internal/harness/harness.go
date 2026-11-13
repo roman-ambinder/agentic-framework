@@ -47,6 +47,29 @@ type Config struct {
 	// Context limits the size of each model request (task 1.6.1).
 	// MaxInputTokens 0 = derived from the adapter's MaxContextTokens.
 	Context contextmgr.Budget
+	// Plan switches on the planning call before step 1 (task Q.4); zero = off.
+	Plan PlanConfig
+}
+
+// PlanCallID is the call id of the planning call; its step is 0 (task Q.4).
+const PlanCallID = "plan"
+
+// DefaultPlanMaxTokens is PlanConfig.MaxTokens when it is zero.
+const DefaultPlanMaxTokens = 1024
+
+// DefaultPlanPrompt is PlanConfig.Prompt when it is empty.
+const DefaultPlanPrompt = "Before you start, write a short plan for this task: a numbered list of at most 7 steps, one line each, naming the files or tools you expect to use. Do not start the work yet and do not call any tools; reply with the plan only."
+
+// PlanFollowUp is the user message Transcript puts after the plan, so that a
+// request never ends with the assistant's own message.
+const PlanFollowUp = "Now carry out the plan above. Change it if you learn something that makes it wrong."
+
+// PlanConfig controls the planning call before step 1 (task Q.4). The zero
+// value means no planning call.
+type PlanConfig struct {
+	Enabled   bool
+	Prompt    string // sent after the task in the plan request; "" = DefaultPlanPrompt
+	MaxTokens int    // output limit of the plan call; 0 = DefaultPlanMaxTokens
 }
 
 // Deps are the run's collaborators.
@@ -100,6 +123,12 @@ func applyDefaults(cfg Config, deps Deps) (Config, Deps) {
 	if cfg.MaxToolOutputBytes == 0 {
 		cfg.MaxToolOutputBytes = toolrouter.DefaultMaxModelBytes
 	}
+	if cfg.Plan.Prompt == "" {
+		cfg.Plan.Prompt = DefaultPlanPrompt
+	}
+	if cfg.Plan.MaxTokens == 0 {
+		cfg.Plan.MaxTokens = DefaultPlanMaxTokens
+	}
 	return cfg, deps
 }
 
@@ -115,6 +144,9 @@ func validate(cfg Config, deps Deps) error {
 		return errors.New("harness: deps: tools is nil")
 	case deps.Policy == nil:
 		return errors.New("harness: deps: policy is nil")
+	}
+	if cfg.Plan.MaxTokens < 0 {
+		return errors.New("harness: config: plan max tokens must be >= 0")
 	}
 	if err := cfg.Context.Validate(); err != nil {
 		return fmt.Errorf("harness: config: %w", err)
