@@ -46,10 +46,10 @@ func (a *Agent) Validate() error {
 }
 
 func (a *Agent) validateModel(p *problems) {
-	validateModelFields(p, "model", a.Model)
+	validateModelFields(p, "model", a.Model, false)
 	for i, f := range a.Model.Fallbacks {
 		path := fmt.Sprintf("model.fallbacks[%d]", i)
-		validateModelFields(p, path, f)
+		validateModelFields(p, path, f, true)
 		if len(f.Fallbacks) > 0 {
 			p.add(path+".fallbacks", "not allowed")
 		}
@@ -60,7 +60,7 @@ func (a *Agent) validateModel(p *problems) {
 }
 
 // validateModelFields checks one model; path is "model" or "model.fallbacks[i]".
-func validateModelFields(p *problems, path string, m Model) {
+func validateModelFields(p *problems, path string, m Model, fallback bool) {
 	switch m.Provider {
 	case "fake", "anthropic", "openai":
 	default:
@@ -69,13 +69,10 @@ func validateModelFields(p *problems, path string, m Model) {
 	if m.Name == "" {
 		p.add(path+".name", "is required")
 	}
-	if m.MaxTokens < 1 || m.MaxTokens > 1000000 {
-		p.add(path+".max_tokens", "must be between 1 and 1000000")
-	}
-	switch m.Effort {
-	case "", "low", "medium", "high", "xhigh", "max":
-	default:
-		p.add(path+".effort", "must be one of low, medium, high, xhigh, max, got %q", m.Effort)
+	if fallback {
+		validateFallbackTuning(p, path, m)
+	} else {
+		validateTuning(p, path, m)
 	}
 	fields := []struct{ name, val string }{
 		{"input_per_mtok", m.Pricing.InputPerMTok},
@@ -87,6 +84,29 @@ func validateModelFields(p *problems, path string, m Model) {
 		if _, err := ParseMicroUSD(f.val); err != nil {
 			p.add(path+".pricing."+f.name, moneyMsg, f.val)
 		}
+	}
+}
+
+// validateTuning checks max_tokens and effort of the primary model.
+func validateTuning(p *problems, path string, m Model) {
+	if m.MaxTokens < 1 || m.MaxTokens > 1000000 {
+		p.add(path+".max_tokens", "must be between 1 and 1000000")
+	}
+	switch m.Effort {
+	case "", "low", "medium", "high", "xhigh", "max":
+	default:
+		p.add(path+".effort", "must be one of low, medium, high, xhigh, max, got %q", m.Effort)
+	}
+}
+
+// validateFallbackTuning rejects max_tokens and effort on a fallback: the
+// harness sends the primary's values and the router passes them through.
+func validateFallbackTuning(p *problems, path string, m Model) {
+	if m.MaxTokens != 0 {
+		p.add(path+".max_tokens", "not supported on fallbacks (the primary's value is used)")
+	}
+	if m.Effort != "" {
+		p.add(path+".effort", "not supported on fallbacks (the primary's value is used)")
 	}
 }
 

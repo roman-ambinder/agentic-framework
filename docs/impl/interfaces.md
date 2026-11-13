@@ -674,6 +674,7 @@ Task 1.6.1 adds the optional `context:` section (`max_input_tokens`,
 which the CLI wiring assigns to `harness.Config.Context`.
 
 Task 1.3 adds `model.fallbacks` and `(*Agent).Prices() map[string]model.Price`.
+A fallback must not set `max_tokens` or `effort` (validation rejects them): the harness sends the primary's values and the router passes them through.
 
 CLI wiring (task 0.9.2, `internal/cli/wiring.go`, unexported, shared by
 `adlc run`, `adlc resume` (1.7) and `adlc eval` (1.8)):

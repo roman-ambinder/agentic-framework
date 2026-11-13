@@ -142,11 +142,6 @@ func (a *Agent) applyDefaults() {
 	if a.Model.Provider == "fake" && a.Model.Name == "" {
 		a.Model.Name = DefaultFakeModel
 	}
-	for i := range a.Model.Fallbacks {
-		if a.Model.Fallbacks[i].MaxTokens == 0 {
-			a.Model.Fallbacks[i].MaxTokens = DefaultMaxTokens
-		}
-	}
 }
 
 var envNameRE = regexp.MustCompile(`^\$\{([A-Z_][A-Z0-9_]*)\}$`)
