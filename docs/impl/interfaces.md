@@ -915,6 +915,9 @@ match `Config.AgentID` exactly (`hello@1`) or by name (`hello`); registry:
 
 ### Evals (`internal/evals`)
 
+The complete lists of Q.1 and Q.2 names are in §9; the lines below are a summary.
+
+
 - **C.4:** `Result.AgentDigest` (`agent_digest`).
 - **Q.1:** `Runner.Repeat`, `Result.Attempt`, `Report.Repeat`, `PassAtK`,
   `Summary.ByAgent`, `Compare`, `PrintComparison` and the comparison types.
