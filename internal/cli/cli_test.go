@@ -75,11 +75,13 @@ func TestCommandsShareDefaultDB(t *testing.T) {
 		t.Fatalf("defaultDBPath = %q", defaultDBPath)
 	}
 	cmds := map[string]*cobra.Command{
-		"run":    newRunCmd(),
-		"resume": newResumeCmd(),
-		"trace":  newTraceCmd(),
-		"cost":   newCostCmd(),
-		"eval":   newEvalCmd(),
+		"run":       newRunCmd(),
+		"resume":    newResumeCmd(),
+		"trace":     newTraceCmd(),
+		"cost":      newCostCmd(),
+		"eval":      newEvalCmd(),
+		"approvals": newApprovalsCmd(),
+		"approve":   newApproveCmd(),
 	}
 	for name, cmd := range cmds {
 		t.Run(name, func(t *testing.T) {
