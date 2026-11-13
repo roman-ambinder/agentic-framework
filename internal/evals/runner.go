@@ -48,6 +48,7 @@ type Runner struct {
 	RunAgent func(ctx context.Context, ar AgentRun) (*eventlog.RunState, error)
 	Now      func() time.Time // default time.Now
 	Stdout   io.Writer        // progress lines; nil = io.Discard
+	Repeat   int              // attempts per bug x agent; 0 or 1 = one attempt
 }
 
 // Result is the outcome of one bug x agent.
@@ -57,6 +58,7 @@ type Result struct {
 	Agent        string             `json:"agent"`    // agent id, e.g. "coder-anthropic@1"
 	Provider     string             `json:"provider"` // from the agent file
 	RunID        string             `json:"run_id"`
+	Attempt      int                `json:"attempt"`     // 1-based; 0 in reports written before task Q.1 (read as 1)
 	StopReason   string             `json:"stop_reason"` // adlcv1.StopReason name; "" if the run never started
 	Hidden       TestOutcome        `json:"hidden"`
 	Grade        *Grade             `json:"grade,omitempty"` // nil when Error != ""
@@ -94,10 +96,12 @@ func (r *Runner) RunAll(ctx context.Context, bugs []Bug, agents []*agentconfig.A
 	var results []Result
 	for _, bug := range bugs {
 		for _, a := range agents {
-			if err := ctx.Err(); err != nil {
-				return results, err
+			for attempt := 1; attempt <= max(1, r.Repeat); attempt++ {
+				if err := ctx.Err(); err != nil {
+					return results, err
+				}
+				results = append(results, r.runAttempt(ctx, bug, a, attempt))
 			}
-			results = append(results, r.RunOne(ctx, bug, a))
 		}
 	}
 	return results, nil
@@ -111,11 +115,21 @@ func runID(bug Bug, provider string, t time.Time) string {
 
 // RunOne runs bug with agent and grades the result. Problems go into
 // Result.Error; it never fails the caller.
-func (r *Runner) RunOne(ctx context.Context, bug Bug, agent *agentconfig.Agent) (res Result) {
+func (r *Runner) RunOne(ctx context.Context, bug Bug, agent *agentconfig.Agent) Result {
+	return r.runAttempt(ctx, bug, agent, 1)
+}
+
+// runAttempt is RunOne for the given 1-based attempt number. With Repeat > 1
+// the run id gets an "-a<attempt>" suffix so repeats never collide.
+func (r *Runner) runAttempt(ctx context.Context, bug Bug, agent *agentconfig.Agent, attempt int) (res Result) {
 	start := r.now()
+	id := runID(bug, agent.Model.Provider, start)
+	if r.Repeat > 1 {
+		id += fmt.Sprintf("-a%d", attempt)
+	}
 	res = Result{
 		BugID: bug.ID, Difficulty: bug.Difficulty, Agent: agent.AgentID(),
-		Provider: agent.Model.Provider, RunID: runID(bug, agent.Model.Provider, start),
+		Provider: agent.Model.Provider, RunID: id, Attempt: attempt,
 	}
 	defer func() {
 		res.DurationMS = r.now().Sub(start).Milliseconds()

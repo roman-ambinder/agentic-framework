@@ -18,6 +18,7 @@ type Report struct {
 	Suite      string    `json:"suite"`
 	StartedAt  time.Time `json:"started_at"`
 	FinishedAt time.Time `json:"finished_at"`
+	Repeat     int       `json:"repeat,omitempty"` // attempts per bug x agent; 0 in old reports, read as 1
 	Results    []Result  `json:"results"`
 	Summary    Summary   `json:"summary"`
 }
@@ -97,8 +98,30 @@ func printSummary(w io.Writer, s Summary) {
 			usd(ps.MedianUSDMicrosSolved), strconv.FormatFloat(ps.MedianStepsSolved, 'f', -1, 64),
 			usd(ps.TotalUSDMicros), ps.Errors)
 	}
+	printPassAtK(w, s)
 	if anyErrors {
 		fmt.Fprintln(w, "note: results with errors are excluded from pass@1")
+	}
+}
+
+// printPassAtK prints one pass@k line per agent that has repeated attempts.
+func printPassAtK(w io.Writer, s Summary) {
+	var ids []string
+	width := 0
+	for id, as := range s.ByAgent {
+		if as.MaxAttempts > 1 {
+			ids = append(ids, id)
+			width = max(width, len(id))
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		as := s.ByAgent[id]
+		parts := make([]string, 0, len(as.PassAtK))
+		for k, v := range as.PassAtK {
+			parts = append(parts, fmt.Sprintf("pass@%d %.3f", k+1, v))
+		}
+		fmt.Fprintf(w, "%-*s  attempts %d  %s\n", width, id, as.MaxAttempts, strings.Join(parts, "  "))
 	}
 }
 
