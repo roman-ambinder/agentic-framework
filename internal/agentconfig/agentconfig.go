@@ -30,6 +30,7 @@ type Agent struct {
 	Budget             Budget       `yaml:"budget"`
 	Context            Context      `yaml:"context"`
 	Policy             Policy       `yaml:"policy"`
+	Hooks              []Hook       `yaml:"hooks"`
 
 	// Dir is the directory of the file Load read ("" for Parse). Not in YAML.
 	Dir string `yaml:"-"`
@@ -62,6 +63,16 @@ type ToolServer struct {
 	Env         map[string]string `yaml:"env"`
 	Risk        map[string]string `yaml:"risk"`
 	DefaultRisk string            `yaml:"default_risk"`
+}
+
+// Hook declares one out-of-process hook plugin (internal/plugin). It is
+// started in the agent file's directory.
+type Hook struct {
+	Name         string            `yaml:"name"`
+	Command      []string          `yaml:"command"`
+	Env          map[string]string `yaml:"env"`
+	StartTimeout string            `yaml:"start_timeout"` // Go duration; "" = plugin default
+	CallTimeout  string            `yaml:"call_timeout"`  // Go duration; "" = plugin default
 }
 
 // Budget holds run limits; zero or empty means no limit.
