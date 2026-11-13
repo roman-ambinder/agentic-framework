@@ -1,0 +1,519 @@
+package harness
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	adlcv1 "github.com/roman-ambinder/agentic-framework/gen/go/adlc/v1"
+	"github.com/roman-ambinder/agentic-framework/internal/eventlog"
+	"github.com/roman-ambinder/agentic-framework/internal/model"
+	"github.com/roman-ambinder/agentic-framework/internal/policy"
+	"github.com/roman-ambinder/agentic-framework/internal/toolrouter"
+)
+
+const (
+	stopCompleted = adlcv1.StopReason_STOP_REASON_COMPLETED
+	stopError     = adlcv1.StopReason_STOP_REASON_ERROR
+)
+
+func defaultDeps(t *testing.T) Deps {
+	t.Helper()
+	return Deps{Tools: staticTools(t), Policy: policy.AllowAll{}}
+}
+
+func wantKinds(t *testing.T, got []*adlcv1.Event, want ...string) {
+	t.Helper()
+	if k := kinds(got); !reflect.DeepEqual(k, want) {
+		t.Fatalf("kinds = %v\nwant    %v", k, want)
+	}
+}
+
+func wantStop(t *testing.T, st *eventlog.RunState, reason adlcv1.StopReason, detail string) {
+	t.Helper()
+	if st.StopReason != reason || st.StopDetail != detail {
+		t.Fatalf("stop = %s %q, want %s %q", st.StopReason, st.StopDetail, reason, detail)
+	}
+}
+
+func TestRunCompletesWithoutTools(t *testing.T) {
+	r := runHarness(t, context.Background(), baseConfig(), defaultDeps(t), textTurn("all done"))
+	wantKinds(t, r.events, "run_started", "model_call_started", "model_call_completed", "run_completed")
+	wantStop(t, r.state, stopCompleted, "")
+	if r.state.Result != "all done" {
+		t.Fatalf("result = %q", r.state.Result)
+	}
+	if r.state.Status != eventlog.StatusFinished {
+		t.Fatalf("status = %s", r.state.Status)
+	}
+	started := r.events[1].GetModelCallStarted()
+	if started.GetCallId() != "m1" || started.GetStep() != 1 || started.GetAttempt() != 1 ||
+		started.GetProvider() != "fake" || started.GetModel() != "m" {
+		t.Fatalf("model_call_started = %v", started)
+	}
+	if r.events[2].GetParentSeq() != r.events[1].GetSeq() {
+		t.Fatal("model_call_completed parent_seq is not the model_call_started seq")
+	}
+	for _, ev := range r.events {
+		if ev.GetRunId() != "r1" || ev.GetAgentId() != "test@1" {
+			t.Fatalf("event %d has run %q agent %q", ev.GetSeq(), ev.GetRunId(), ev.GetAgentId())
+		}
+	}
+	req := r.model.Requests()[0]
+	if req.MaxTokens != 4096 || req.Model != "m" || len(req.Tools) != 1 {
+		t.Fatalf("request = %+v", req)
+	}
+}
+
+func TestRunExecutesToolCallAndContinues(t *testing.T) {
+	r := runHarness(t, context.Background(), baseConfig(), defaultDeps(t),
+		toolTurn(readCall("t1", "a.go")), textTurn("ok"))
+	wantKinds(t, r.events, "run_started",
+		"model_call_started", "model_call_completed",
+		"tool_call_requested", "policy_decided", "tool_call_completed",
+		"model_call_started", "model_call_completed", "run_completed")
+	wantStop(t, r.state, stopCompleted, "")
+	if r.state.ToolCalls != 1 || r.state.Step != 2 {
+		t.Fatalf("state = %+v", r.state)
+	}
+	req := r.model.Requests()[1]
+	if len(req.Messages) != 3 {
+		t.Fatalf("2nd request has %d messages, want 3", len(req.Messages))
+	}
+	call := req.Messages[1].Parts[0].ToolCall
+	if req.Messages[1].Role != model.RoleAssistant || call == nil || call.ID != "t1" {
+		t.Fatalf("assistant message = %+v", req.Messages[1])
+	}
+	res := req.Messages[2].Parts[0].ToolResult
+	if req.Messages[2].Role != model.RoleUser || res.CallID != "t1" || res.Content != "contents of a.go" || res.IsError {
+		t.Fatalf("tool result message = %+v", req.Messages[2])
+	}
+	pd := r.events[4].GetPolicyDecided()
+	if pd.GetCallId() != "t1" || pd.GetDecision() != adlcv1.Decision_DECISION_ALLOW || r.events[4].GetParentSeq() != r.events[3].GetSeq() {
+		t.Fatalf("policy_decided = %v parent %d", pd, r.events[4].GetParentSeq())
+	}
+	tr := r.events[3].GetToolCallRequested()
+	if tr.GetRiskClass() != adlcv1.RiskClass_RISK_CLASS_READ || tr.GetServer() != "fs" {
+		t.Fatalf("tool_call_requested = %v", tr)
+	}
+}
+
+func TestRunRunsParallelCallsInOrder(t *testing.T) {
+	r := runHarness(t, context.Background(), baseConfig(), defaultDeps(t),
+		toolTurn(readCall("t1", "a"), readCall("t2", "b")), textTurn("ok"))
+	done := pick(r.events, (*adlcv1.Event).GetToolCallCompleted)
+	if len(done) != 2 || done[0].GetCallId() != "t1" || done[1].GetCallId() != "t2" {
+		t.Fatalf("completed = %v", done)
+	}
+	last := r.model.Requests()[1].Messages[2]
+	if len(last.Parts) != 2 || last.Parts[0].ToolResult.CallID != "t1" || last.Parts[1].ToolResult.CallID != "t2" ||
+		last.Parts[1].ToolResult.Content != "contents of b" {
+		t.Fatalf("results = %+v", last.Parts)
+	}
+}
+
+func TestRunUnknownToolIsFedBack(t *testing.T) {
+	r := runHarness(t, context.Background(), baseConfig(), defaultDeps(t),
+		toolTurn(model.ToolCall{ID: "t1", Name: "nope__x", Arguments: json.RawMessage(`{}`)}), textTurn("ok"))
+	wantStop(t, r.state, stopCompleted, "")
+	if n := len(pick(r.events, (*adlcv1.Event).GetPolicyDecided)); n != 0 {
+		t.Fatalf("%d policy_decided events for an unknown tool", n)
+	}
+	req := pick(r.events, (*adlcv1.Event).GetToolCallRequested)[0]
+	if req.GetRiskClass() != adlcv1.RiskClass_RISK_CLASS_UNSPECIFIED || req.GetServer() != "" {
+		t.Fatalf("tool_call_requested = %v", req)
+	}
+	done := pick(r.events, (*adlcv1.Event).GetToolCallCompleted)[0]
+	want := `unknown tool "nope__x"; available tools: fs__read_file`
+	if !done.GetIsError() || string(done.GetOutput()) != want {
+		t.Fatalf("completed = %v, want error %q", done, want)
+	}
+	if res := r.model.Requests()[1].Messages[2].Parts[0].ToolResult; !res.IsError || res.Content != want {
+		t.Fatalf("model saw %+v", res)
+	}
+}
+
+func TestRunToolErrorResultIsFedBack(t *testing.T) {
+	tool := funcTool("x__fail", adlcv1.RiskClass_RISK_CLASS_READ, func(context.Context, json.RawMessage) (toolrouter.Result, error) {
+		return toolrouter.Result{Output: []byte("boom"), IsError: true, ExitCode: 2}, nil
+	})
+	deps := Deps{Tools: staticTools(t, tool), Policy: policy.AllowAll{}}
+	r := runHarness(t, context.Background(), baseConfig(), deps,
+		toolTurn(model.ToolCall{ID: "t1", Name: "x__fail"}), textTurn("ok"))
+	wantStop(t, r.state, stopCompleted, "")
+	if res := r.model.Requests()[1].Messages[2].Parts[0].ToolResult; !res.IsError || res.Content != "boom" {
+		t.Fatalf("model saw %+v", res)
+	}
+	done := pick(r.events, (*adlcv1.Event).GetToolCallCompleted)[0]
+	if done.GetExitCode() != 2 || r.state.ToolErrors != 1 {
+		t.Fatalf("completed = %v, state = %+v", done, r.state)
+	}
+}
+
+func TestRunRouterErrorIsFedBack(t *testing.T) {
+	tool := funcTool("x__crash", adlcv1.RiskClass_RISK_CLASS_READ, func(context.Context, json.RawMessage) (toolrouter.Result, error) {
+		return toolrouter.Result{}, errors.New("server crashed")
+	})
+	deps := Deps{Tools: staticTools(t, tool), Policy: policy.AllowAll{}}
+	r := runHarness(t, context.Background(), baseConfig(), deps,
+		toolTurn(model.ToolCall{ID: "t1", Name: "x__crash"}), textTurn("ok"))
+	wantStop(t, r.state, stopCompleted, "")
+	errs := pick(r.events, (*adlcv1.Event).GetErrorOccurred)
+	if len(errs) != 1 || errs[0].GetComponent() != "toolrouter" || errs[0].GetErrorClass() != adlcv1.ErrorClass_ERROR_CLASS_TOOL {
+		t.Fatalf("errors = %v", errs)
+	}
+	res := r.model.Requests()[1].Messages[2].Parts[0].ToolResult
+	if !res.IsError || !strings.HasPrefix(res.Content, "tool call failed: ") || !strings.Contains(res.Content, "server crashed") {
+		t.Fatalf("model saw %+v", res)
+	}
+}
+
+func TestRunPolicyDeny(t *testing.T) {
+	called := false
+	tool := funcTool("x__read", adlcv1.RiskClass_RISK_CLASS_READ, func(context.Context, json.RawMessage) (toolrouter.Result, error) {
+		called = true
+		return toolrouter.Result{}, nil
+	})
+	pol, err := policy.NewStatic([]policy.Rule{{ID: "no-read", Risk: adlcv1.RiskClass_RISK_CLASS_READ, Decision: adlcv1.Decision_DECISION_DENY}},
+		adlcv1.Decision_DECISION_ALLOW)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := Deps{Tools: staticTools(t, tool), Policy: pol}
+	r := runHarness(t, context.Background(), baseConfig(), deps,
+		toolTurn(model.ToolCall{ID: "t1", Name: "x__read"}, readCall("t2", "a")), textTurn("unused"))
+	wantStop(t, r.state, adlcv1.StopReason_STOP_REASON_DENIED, "rule no-read: matched rule no-read")
+	wantKinds(t, r.events, "run_started", "model_call_started", "model_call_completed",
+		"tool_call_requested", "policy_decided", "run_completed")
+	if called || r.state.Denials != 1 || r.model.Remaining() != 1 {
+		t.Fatalf("called=%v state=%+v remaining=%d", called, r.state, r.model.Remaining())
+	}
+}
+
+func TestRunPolicyNeedsApproval(t *testing.T) {
+	called := false
+	tool := funcTool("x__w", adlcv1.RiskClass_RISK_CLASS_WRITE_LOCAL, func(context.Context, json.RawMessage) (toolrouter.Result, error) {
+		called = true
+		return toolrouter.Result{}, nil
+	})
+	pol, err := policy.NewStatic(nil, adlcv1.Decision_DECISION_NEEDS_APPROVAL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := Deps{Tools: staticTools(t, tool), Policy: pol}
+	r := runHarness(t, context.Background(), baseConfig(), deps,
+		toolTurn(model.ToolCall{ID: "t1", Name: "x__w", Arguments: json.RawMessage(`{"a":1}`)}))
+	wantStop(t, r.state, adlcv1.StopReason_STOP_REASON_AWAITING_APPROVAL, "")
+	wantKinds(t, r.events, "run_started", "model_call_started", "model_call_completed",
+		"tool_call_requested", "policy_decided", "approval_requested", "run_completed")
+	ap := r.events[5].GetApprovalRequested()
+	if ap.GetApprovalId() != "a-t1" || ap.GetCallId() != "t1" || ap.GetSummary() != `x__w {"a":1}` {
+		t.Fatalf("approval_requested = %v", ap)
+	}
+	if r.state.Status != eventlog.StatusPaused || called {
+		t.Fatalf("status = %s, called = %v", r.state.Status, called)
+	}
+}
+
+type errPolicy struct{}
+
+func (errPolicy) Authorize(context.Context, policy.Request) (policy.Decision, error) {
+	return policy.Decision{}, errors.New("policy server down")
+}
+
+type emptyPolicy struct{}
+
+func (emptyPolicy) Authorize(context.Context, policy.Request) (policy.Decision, error) {
+	return policy.Decision{}, nil
+}
+
+func TestRunPolicyError(t *testing.T) {
+	deps := Deps{Tools: staticTools(t), Policy: errPolicy{}}
+	r := runHarness(t, context.Background(), baseConfig(), deps, toolTurn(readCall("t1", "a")))
+	wantStop(t, r.state, stopError, "policy: policy server down")
+	errs := pick(r.events, (*adlcv1.Event).GetErrorOccurred)
+	if len(errs) != 1 || errs[0].GetComponent() != "policy" || errs[0].GetErrorClass() != adlcv1.ErrorClass_ERROR_CLASS_POLICY {
+		t.Fatalf("errors = %v", errs)
+	}
+}
+
+func TestRunPolicyWithoutDecision(t *testing.T) {
+	deps := Deps{Tools: staticTools(t), Policy: emptyPolicy{}}
+	r := runHarness(t, context.Background(), baseConfig(), deps, toolTurn(readCall("t1", "a")))
+	wantStop(t, r.state, stopError, "policy returned no decision")
+}
+
+func respWithFinish(turn model.FakeTurn, f adlcv1.FinishReason) model.FakeTurn {
+	turn.Response.Finish = f
+	return turn
+}
+
+func TestRunModelRefusal(t *testing.T) {
+	r := runHarness(t, context.Background(), baseConfig(), defaultDeps(t),
+		respWithFinish(textTurn("no"), adlcv1.FinishReason_FINISH_REASON_REFUSAL))
+	wantStop(t, r.state, stopError, "model refused")
+}
+
+func TestRunMaxTokensWithoutToolCalls(t *testing.T) {
+	r := runHarness(t, context.Background(), baseConfig(), defaultDeps(t),
+		respWithFinish(textTurn("cut of"), adlcv1.FinishReason_FINISH_REASON_MAX_TOKENS))
+	wantStop(t, r.state, stopError, "output limit reached")
+}
+
+func TestRunModelError(t *testing.T) {
+	merr := &model.Error{Class: adlcv1.ErrorClass_ERROR_CLASS_RATE_LIMIT, HTTPStatus: 429, Retryable: true, Err: errors.New("slow down")}
+	r := runHarness(t, context.Background(), baseConfig(), defaultDeps(t), model.FakeTurn{Err: merr})
+	wantStop(t, r.state, stopError, merr.Error())
+	wantKinds(t, r.events, "run_started", "model_call_started", "model_call_failed", "run_completed")
+	f := r.events[2].GetModelCallFailed()
+	if f.GetCallId() != "m1" || f.GetErrorClass() != adlcv1.ErrorClass_ERROR_CLASS_RATE_LIMIT ||
+		f.GetHttpStatus() != 429 || f.GetWillRetry() || f.GetMessage() != merr.Error() {
+		t.Fatalf("model_call_failed = %v", f)
+	}
+}
+
+func TestRunPlainModelErrorIsInternal(t *testing.T) {
+	r := runHarness(t, context.Background(), baseConfig(), defaultDeps(t), model.FakeTurn{Err: errors.New("weird")})
+	f := r.events[2].GetModelCallFailed()
+	if f.GetErrorClass() != adlcv1.ErrorClass_ERROR_CLASS_INTERNAL || f.GetHttpStatus() != 0 {
+		t.Fatalf("model_call_failed = %v", f)
+	}
+}
+
+func TestRunScriptExhausted(t *testing.T) {
+	r := runHarness(t, context.Background(), baseConfig(), defaultDeps(t), toolTurn(readCall("t1", "a")))
+	if r.state.StopReason != stopError || !strings.Contains(r.state.StopDetail, "script exhausted") {
+		t.Fatalf("stop = %s %q", r.state.StopReason, r.state.StopDetail)
+	}
+}
+
+func TestRunCancelledBeforeFirstCall(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := runHarness(t, ctx, baseConfig(), defaultDeps(t), textTurn("unused"))
+	wantKinds(t, r.events, "run_started", "run_completed")
+	wantStop(t, r.state, adlcv1.StopReason_STOP_REASON_CANCELLED, "")
+}
+
+func TestRunCancelledDuringToolCall(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tool := funcTool("x__slow", adlcv1.RiskClass_RISK_CLASS_READ, func(ctx context.Context, _ json.RawMessage) (toolrouter.Result, error) {
+		cancel()
+		return toolrouter.Result{}, ctx.Err()
+	})
+	deps := Deps{Tools: staticTools(t, tool), Policy: policy.AllowAll{}}
+	r := runHarness(t, ctx, baseConfig(), deps, toolTurn(model.ToolCall{ID: "t1", Name: "x__slow"}, readCall("t2", "a")))
+	wantStop(t, r.state, adlcv1.StopReason_STOP_REASON_CANCELLED, "")
+	if k := kinds(r.events); k[len(k)-1] != "run_completed" {
+		t.Fatalf("kinds = %v", k)
+	}
+	if n := len(pick(r.events, (*adlcv1.Event).GetToolCallRequested)); n != 1 {
+		t.Fatalf("%d calls requested, want 1 (later calls must not start)", n)
+	}
+}
+
+// ticker is a clock that moves 1s on every call.
+type ticker struct{ t time.Time }
+
+func (c *ticker) Now() time.Time {
+	c.t = c.t.Add(time.Second)
+	return c.t
+}
+
+func TestRunRecordsCostAndLatency(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Price = model.Price{InputPerMTok: 1_000_000}
+	turn := textTurn("ok")
+	turn.Response.Usage = model.Usage{InputTokens: 10, OutputTokens: 3, CacheReadTokens: 2, CacheWriteTokens: 1}
+	deps := defaultDeps(t)
+	deps.Now = (&ticker{}).Now
+	r := runHarness(t, context.Background(), cfg, deps, turn)
+	done := r.events[2]
+	c := done.GetCost()
+	if c.GetUsdMicros() != 10 || c.GetInputTokens() != 10 || c.GetOutputTokens() != 3 ||
+		c.GetCacheReadTokens() != 2 || c.GetCacheWriteTokens() != 1 {
+		t.Fatalf("cost = %v", c)
+	}
+	if lat := done.GetModelCallCompleted().GetLatency().AsDuration(); lat != time.Second {
+		t.Fatalf("latency = %s", lat)
+	}
+	if r.state.Usage.USDMicros != 10 || r.state.Usage.InputTokens != 10 {
+		t.Fatalf("usage = %+v", r.state.Usage)
+	}
+}
+
+func TestRunRecordsToolDuration(t *testing.T) {
+	deps := defaultDeps(t)
+	deps.Now = (&ticker{}).Now
+	r := runHarness(t, context.Background(), baseConfig(), deps, toolTurn(readCall("t1", "a")), textTurn("ok"))
+	done := pick(r.events, (*adlcv1.Event).GetToolCallCompleted)[0]
+	if d := done.GetDuration().AsDuration(); d != time.Second {
+		t.Fatalf("duration = %s", d)
+	}
+}
+
+func TestRunAssignsMissingToolCallIDs(t *testing.T) {
+	r := runHarness(t, context.Background(), baseConfig(), defaultDeps(t),
+		toolTurn(readCall("", "a"), readCall("", "b")), textTurn("ok"))
+	calls := pick(r.events, (*adlcv1.Event).GetModelCallCompleted)[0].GetToolCalls()
+	reqs := pick(r.events, (*adlcv1.Event).GetToolCallRequested)
+	for i, want := range []string{"m1-t1", "m1-t2"} {
+		if calls[i].GetId() != want || reqs[i].GetCall().GetId() != want {
+			t.Fatalf("call %d ids: model_call_completed %q, requested %q, want %q", i, calls[i].GetId(), reqs[i].GetCall().GetId(), want)
+		}
+	}
+	if id := r.model.Requests()[1].Messages[1].Parts[0].ToolCall.ID; id != "m1-t1" {
+		t.Fatalf("id in next request = %q", id)
+	}
+}
+
+func TestRunStoresProviderBlobs(t *testing.T) {
+	blob := model.Blob{Provider: "fake", Kind: "thinking", Data: []byte("zzz")}
+	turn := model.FakeTurn{Response: &model.Response{
+		Message: model.Message{Role: model.RoleAssistant, Parts: []model.Part{
+			model.BlobPart(blob), model.TextPart("hm"), model.ToolCallPart(readCall("t1", "a")), model.BlobPart(blob),
+		}},
+		Finish: adlcv1.FinishReason_FINISH_REASON_TOOL_USE,
+	}}
+	r := runHarness(t, context.Background(), baseConfig(), defaultDeps(t), turn, textTurn("ok"))
+	blobs := pick(r.events, (*adlcv1.Event).GetModelCallCompleted)[0].GetProviderBlobs()
+	if len(blobs) != 2 || blobs[1].GetIndex() != 3 || blobs[0].GetIndex() != 0 || blobs[0].GetKind() != "thinking" || string(blobs[0].GetData()) != "zzz" {
+		t.Fatalf("blobs = %v", blobs)
+	}
+	parts := r.model.Requests()[1].Messages[1].Parts
+	if len(parts) != 4 || parts[3].Kind != model.PartBlob || parts[0].Kind != model.PartBlob || !reflect.DeepEqual(*parts[0].Blob, blob) ||
+		parts[1].Kind != model.PartText || parts[2].Kind != model.PartToolCall {
+		t.Fatalf("assistant parts = %+v", parts)
+	}
+}
+
+func TestRunCapsToolOutputForModel(t *testing.T) {
+	big := strings.Repeat("y", 50)
+	tool := funcTool("x__big", adlcv1.RiskClass_RISK_CLASS_READ, func(context.Context, json.RawMessage) (toolrouter.Result, error) {
+		return toolrouter.Result{Output: []byte(big)}, nil
+	})
+	cfg := baseConfig()
+	cfg.MaxToolOutputBytes = 10
+	deps := Deps{Tools: staticTools(t, tool), Policy: policy.AllowAll{}}
+	r := runHarness(t, context.Background(), cfg, deps, toolTurn(model.ToolCall{ID: "t1", Name: "x__big"}), textTurn("ok"))
+	done := pick(r.events, (*adlcv1.Event).GetToolCallCompleted)[0]
+	if string(done.GetOutput()) != big || !done.GetTruncatedForModel() {
+		t.Fatalf("completed = %v", done)
+	}
+	want, _ := toolrouter.ForModel([]byte(big), 10)
+	if got := r.model.Requests()[1].Messages[2].Parts[0].ToolResult.Content; got != want {
+		t.Fatalf("model saw %q, want %q", got, want)
+	}
+}
+
+func TestRunInvalidConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config, *Deps)
+		want   string
+	}{
+		{"run id", func(c *Config, _ *Deps) { c.RunID = "" }, "harness: config: run id is empty"},
+		{"task", func(c *Config, _ *Deps) { c.Task = "" }, "harness: config: task is empty"},
+		{"log", func(_ *Config, d *Deps) { d.Log = nil }, "harness: deps: log is nil"},
+		{"model", func(_ *Config, d *Deps) { d.Model = nil }, "harness: deps: model is nil"},
+		{"tools", func(_ *Config, d *Deps) { d.Tools = nil }, "harness: deps: tools is nil"},
+		{"policy", func(_ *Config, d *Deps) { d.Policy = nil }, "harness: deps: policy is nil"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newLog(t)
+			cfg, deps := baseConfig(), defaultDeps(t)
+			deps.Log, deps.Model = store, model.NewFake(textTurn("x"))
+			tt.mutate(&cfg, &deps)
+			state, err := Run(context.Background(), cfg, deps)
+			if state != nil || err == nil || err.Error() != tt.want {
+				t.Fatalf("Run = %v, %v; want error %q", state, err, tt.want)
+			}
+			if evs, _ := store.Read(context.Background(), "r1", 0); len(evs) != 0 {
+				t.Fatalf("%d events written for an invalid config", len(evs))
+			}
+		})
+	}
+}
+
+func TestRunLogFailure(t *testing.T) {
+	deps := defaultDeps(t)
+	deps.Log = &failingLog{Log: newLog(t), n: 1}
+	deps.Model = model.NewFake(textTurn("x"))
+	state, err := Run(context.Background(), baseConfig(), deps)
+	if state != nil || !errors.Is(err, errLogDown) || !strings.HasPrefix(err.Error(), "harness: ") {
+		t.Fatalf("Run = %v, %v", state, err)
+	}
+}
+
+func TestRecorderAddFillsIdsAndState(t *testing.T) {
+	store := newLog(t)
+	rec := newRecorder(context.Background(), store, "r9", "a@1")
+	seq, err := rec.add(&adlcv1.Event{Payload: &adlcv1.Event_RunStarted{RunStarted: &adlcv1.RunStarted{Task: "t"}}})
+	if err != nil || seq != 1 {
+		t.Fatalf("seq = %d, err = %v", seq, err)
+	}
+	ev := rec.events[0]
+	if ev.GetRunId() != "r9" || ev.GetAgentId() != "a@1" || ev.GetTime() == nil {
+		t.Fatalf("event = %v", ev)
+	}
+	if rec.state.RunID != "r9" || rec.state.Task != "t" || rec.state.LastSeq != 1 {
+		t.Fatalf("state = %+v", rec.state)
+	}
+}
+
+func TestRecorderAddRejectsInvalidSequence(t *testing.T) {
+	rec := newRecorder(context.Background(), newLog(t), "r9", "a@1")
+	_, _ = rec.add(&adlcv1.Event{Payload: &adlcv1.Event_RunStarted{RunStarted: &adlcv1.RunStarted{Task: "t"}}})
+	_, err := rec.add(&adlcv1.Event{Payload: &adlcv1.Event_ToolCallCompleted{ToolCallCompleted: &adlcv1.ToolCallCompleted{CallId: "nope"}}})
+	if !errors.Is(err, eventlog.ErrInvalidLog) {
+		t.Fatalf("err = %v, want ErrInvalidLog", err)
+	}
+	if len(rec.events) != 1 {
+		t.Fatalf("events = %d, want 1", len(rec.events))
+	}
+}
+
+func TestSleepCtxReturnsContextError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := sleepCtx(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+	if err := sleepCtx(context.Background(), time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// cancelAfterModel cancels the run's context right after the model answers.
+type cancelAfterModel struct {
+	*model.Fake
+	cancel context.CancelFunc
+}
+
+func (m cancelAfterModel) Generate(ctx context.Context, req *model.Request) (*model.Response, error) {
+	resp, err := m.Fake.Generate(ctx, req)
+	m.cancel()
+	return resp, err
+}
+
+func TestRunCancelledAfterModelResponseRequestsNoTool(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := newLog(t)
+	deps := defaultDeps(t)
+	deps.Log = store
+	deps.Model = cancelAfterModel{Fake: model.NewFake(toolTurn(readCall("t1", "a"))), cancel: cancel}
+	state, err := Run(ctx, baseConfig(), deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := assertFolds(t, store, "r1", state)
+	wantKinds(t, events, "run_started", "model_call_started", "model_call_completed", "run_completed")
+	wantStop(t, state, adlcv1.StopReason_STOP_REASON_CANCELLED, "")
+}
