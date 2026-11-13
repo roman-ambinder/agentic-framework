@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -100,6 +101,11 @@ func TestCostBadGrouping(t *testing.T) {
 
 func TestCostEmptyLog(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "empty.db")
+	store, err := eventlog.Open(context.Background(), db) // an existing log with no runs
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.Close()
 	code, out, errOut := run(t, "cost", "--db", db)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
@@ -110,5 +116,17 @@ func TestCostEmptyLog(t *testing.T) {
 	code, out, _ = run(t, "cost", "--json", "--db", db)
 	if code != 0 || !strings.Contains(out, `"rows": []`) {
 		t.Errorf("json exit %d, output %q", code, out)
+	}
+}
+
+// A typo in --db must be an error, not an empty report from a new file.
+func TestCostMissingDB(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "typo.db")
+	code, _, errOut := run(t, "cost", "--db", db)
+	if code != 1 || !strings.Contains(errOut, "does not exist") {
+		t.Errorf("exit %d, stderr %q; want 1 and \"does not exist\"", code, errOut)
+	}
+	if _, err := os.Stat(db); err == nil {
+		t.Errorf("%s was created", db)
 	}
 }

@@ -38,7 +38,7 @@ func newCostCmd() *cobra.Command {
 
 // costReport builds the cost report for ids (all runs if none) and prints it.
 func costReport(ctx context.Context, o costOptions, ids []string, stdout io.Writer) error {
-	store, err := eventlog.Open(ctx, o.db)
+	store, err := openExistingLog(ctx, o.db)
 	if err != nil {
 		return &exitError{code: 1, err: err}
 	}
