@@ -76,6 +76,7 @@ func TestEvalDryRunUnknownBug(t *testing.T) {
 		t.Errorf("code = %d, stderr = %q", code, stderr)
 	}
 }
+
 func TestEvalRejectsFakeProviderBeforeDocker(t *testing.T) {
 	dir := t.TempDir()
 	agent := dir + "/fake-agent.yaml"
