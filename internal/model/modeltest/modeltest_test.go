@@ -61,3 +61,32 @@ func TestCheckErrorDetectsMismatch(t *testing.T) {
 		t.Fatalf("got %d failures, want 2", len(tb.errs))
 	}
 }
+
+// Adapters rely on CheckResponse to verify token accounting, so a usage
+// difference in any field must fail.
+func TestCheckResponseDetectsUsageMismatch(t *testing.T) {
+	base := func() *model.Response {
+		r := responseWithArgs(`{}`)
+		r.Usage = model.Usage{InputTokens: 10, OutputTokens: 2, CacheReadTokens: 3, CacheWriteTokens: 4}
+		return r
+	}
+	tb := &fakeTB{}
+	CheckResponse(tb, base(), base())
+	if len(tb.errs) != 0 {
+		t.Fatalf("unexpected failures: %v", tb.errs)
+	}
+	for name, change := range map[string]func(*model.Usage){
+		"input":       func(u *model.Usage) { u.InputTokens++ },
+		"output":      func(u *model.Usage) { u.OutputTokens++ },
+		"cache read":  func(u *model.Usage) { u.CacheReadTokens++ },
+		"cache write": func(u *model.Usage) { u.CacheWriteTokens++ },
+	} {
+		tb := &fakeTB{}
+		got := base()
+		change(&got.Usage)
+		CheckResponse(tb, got, base())
+		if len(tb.errs) == 0 {
+			t.Errorf("%s token difference did not fail", name)
+		}
+	}
+}
