@@ -69,9 +69,12 @@ func (h *Host) Create(_ context.Context, spec sandbox.Spec) (sandbox.Handle, err
 		}
 	}
 	id := fmt.Sprintf("host-%d", n)
-	env := make(map[string]string, len(spec.Env))
+	env := make(map[string]string, len(spec.Env)+1)
 	for k, v := range spec.Env {
 		env[k] = v
+	}
+	if _, ok := env["HOME"]; !ok {
+		env["HOME"] = sandbox.DefaultHome // same environment shape as Docker
 	}
 	h.mu.Lock()
 	h.dirs[id], h.roots[id], h.envList[id] = ws, root, env

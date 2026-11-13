@@ -20,6 +20,21 @@ const (
 // WorkspacePath is where the workspace lives inside every sandbox.
 const WorkspacePath = "/workspace"
 
+// SandboxUID and SandboxGID are the user every sandbox process runs as.
+const (
+	SandboxUID = 65532
+	SandboxGID = 65532
+)
+
+// PidsLimit caps the number of processes in a sandbox.
+const PidsLimit = 512
+
+// MaxWorkspaceBytes caps the total size of files copied into a sandbox.
+const MaxWorkspaceBytes = 512 << 20 // 512 MiB
+
+// DefaultHome is HOME inside a sandbox unless Spec.Env sets it.
+const DefaultHome = "/tmp"
+
 // MaxOutputBytes caps ExecResult.Stdout and ExecResult.Stderr each.
 const MaxOutputBytes = 8 << 20 // 8 MiB
 
@@ -37,10 +52,10 @@ var (
 type Spec struct {
 	RunID        string            // required; stored as label adlc.run_id
 	Image        string            // required, e.g. "golang:1.26"
-	WorkspaceDir string            // host dir copied into /workspace (task 1.4.2)
-	CPUs         float64           // 0 = no limit (task 1.4.2)
-	MemoryBytes  int64             // 0 = no limit (task 1.4.2)
-	Network      bool              // false = no network (task 1.4.2)
+	WorkspaceDir string            // host dir copied into /workspace; "" = empty /workspace
+	CPUs         float64           // 0 = no limit
+	MemoryBytes  int64             // 0 = no limit
+	Network      bool              // false = no network
 	Env          map[string]string // the only environment the container gets
 }
 
