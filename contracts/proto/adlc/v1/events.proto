@@ -185,7 +185,7 @@ message ProviderBlob {
 message ToolCall {
   // Provider's tool-call id, used to match results.
   string id = 1;
-  // Namespaced tool name, e.g. "fs.read_file".
+  // Namespaced tool name, e.g. "fs__read_file".
   string name = 2;
   // Arguments as a JSON object.
   string arguments_json = 3;
