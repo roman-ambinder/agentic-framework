@@ -16,6 +16,10 @@ the design discussion can finish the task without making design decisions.
 If anything in a brief is unclear or wrong, stop and report it (see
 "When to stop and ask" in `AGENTS.md`).
 
+`interfaces.md` already contains the reconciled API of every task. When a brief
+says "add X to `interfaces.md`", check whether X is already there with the same
+signature; if it is, leave it and say so in the PR. If it differs, stop and report.
+
 ## Task index and order
 
 Sizes: S = small, M = medium, L = large (see the work plan, §1).
