@@ -1,6 +1,6 @@
 id: statement-opening-sign
 difficulty: hard
-title: Customer statements: running balance never reaches the closing balance
+title: "Customer statements: running balance never reaches the closing balance"
 fixture: ledger
 test_package: ledger
 hidden_tests:

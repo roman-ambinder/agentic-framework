@@ -58,7 +58,7 @@ Change: `Makefile` — target `bugs-check` (not part of `ci`; task E.3 adds the 
 ```yaml
 id: money-split-remainder
 difficulty: easy
-title: Splitting an amount loses a cent
+title: Splitting an amount loses a cent  # quote it ("...") if it contains ": "
 fixture: ledger
 test_package: money
 hidden_tests:

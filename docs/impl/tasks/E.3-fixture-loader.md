@@ -61,7 +61,7 @@ relative to the fixture root.
 ```yaml
 id: money-split-remainder
 difficulty: easy            # easy | medium | hard
-title: Splitting an amount loses a cent   # short human summary; the agent never sees it
+title: Splitting an amount loses a cent   # short human summary; quote it if it contains ": "; the agent never sees it
 fixture: ledger             # directory name under evals/fixtures
 test_package: money         # where hidden_test.go goes, relative to the fixture root ("." = root)
 hidden_tests:               # top-level test function names in hidden_test.go; each starts with TestHidden
