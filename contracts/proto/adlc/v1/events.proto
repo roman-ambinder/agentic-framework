@@ -1,0 +1,293 @@
+syntax = "proto3";
+
+// Package adlc.v1 holds the language-neutral contracts of the ADLC framework.
+//
+// The run event log is the framework's source of truth: run state, traces,
+// cost reports, evaluations and audit records are all derived from it.
+// Events are append-only and never edited after they are written.
+//
+// Compatibility rules (enforced by `buf breaking` in CI):
+//   - never renumber or reuse a field number; reserve removed ones
+//   - add new payload kinds as new oneof members, never repurpose old ones
+//   - consumers must tolerate unknown payload kinds (skip them)
+package adlc.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// Event is one entry in a run's append-only log.
+message Event {
+  // Run this event belongs to.
+  string run_id = 1;
+  // Position in the run's log, starting at 1, with no gaps.
+  uint64 seq = 2;
+  // When the event was recorded.
+  google.protobuf.Timestamp time = 3;
+  // Agent (versioned identity) that produced the event, if any.
+  string agent_id = 4;
+  // seq of the event that caused this one (e.g. tool result -> tool call).
+  // 0 means none.
+  uint64 parent_seq = 5;
+  // Cost attributable to this event. Unset when the event has no cost.
+  Cost cost = 6;
+  // W3C trace context, so events link to OpenTelemetry spans.
+  TraceContext trace = 7;
+
+  reserved 8 to 9;
+
+  oneof payload {
+    RunStarted run_started = 10;
+    RunCompleted run_completed = 11;
+    ModelCallStarted model_call_started = 12;
+    ModelCallCompleted model_call_completed = 13;
+    ModelCallFailed model_call_failed = 14;
+    ToolCallRequested tool_call_requested = 15;
+    ToolCallCompleted tool_call_completed = 16;
+    PolicyDecided policy_decided = 17;
+    ApprovalRequested approval_requested = 18;
+    ApprovalResolved approval_resolved = 19;
+    Checkpoint checkpoint = 20;
+    ErrorOccurred error_occurred = 21;
+  }
+}
+
+// Cost of an event. Money is in micro-US-dollars to avoid floating point.
+message Cost {
+  int64 input_tokens = 1;
+  int64 output_tokens = 2;
+  int64 cache_read_tokens = 3;
+  int64 cache_write_tokens = 4;
+  int64 usd_micros = 5;
+}
+
+// TraceContext carries W3C Trace Context headers.
+message TraceContext {
+  string traceparent = 1;
+  string tracestate = 2;
+}
+
+// Budget limits for a run. A zero value means "no limit" for that field.
+message Budget {
+  uint32 max_steps = 1;
+  int64 max_tokens = 2;
+  google.protobuf.Duration max_wall_clock = 3;
+  int64 max_usd_micros = 4;
+  uint32 max_tool_calls = 5;
+}
+
+// ---- Run lifecycle ---------------------------------------------------------
+
+message RunStarted {
+  // Versioned agent definition, e.g. "coder@3".
+  string agent_version = 1;
+  // The task given to the agent.
+  string task = 2;
+  Budget budget = 3;
+  // Set when the run is part of an orchestrated workflow.
+  string workflow_id = 4;
+  string task_id = 5;
+  // Run this one was resumed from, if any.
+  string resumed_from_run_id = 6;
+}
+
+message RunCompleted {
+  StopReason stop_reason = 1;
+  // Final answer or summary from the agent, if any.
+  string result = 2;
+  // Which limit ended the run, when stop_reason is BUDGET_EXHAUSTED.
+  BudgetKind exhausted_budget = 3;
+  // Human-readable detail for the stop reason.
+  string detail = 4;
+}
+
+// StopReason says why a run ended (or paused).
+enum StopReason {
+  STOP_REASON_UNSPECIFIED = 0;
+  STOP_REASON_COMPLETED = 1;
+  STOP_REASON_BUDGET_EXHAUSTED = 2;
+  STOP_REASON_DENIED = 3;
+  // Paused, not finished: the run checkpointed and exited until approval.
+  STOP_REASON_AWAITING_APPROVAL = 4;
+  STOP_REASON_ERROR = 5;
+  STOP_REASON_CANCELLED = 6;
+}
+
+enum BudgetKind {
+  BUDGET_KIND_UNSPECIFIED = 0;
+  BUDGET_KIND_STEPS = 1;
+  BUDGET_KIND_TOKENS = 2;
+  BUDGET_KIND_WALL_CLOCK = 3;
+  BUDGET_KIND_COST = 4;
+  BUDGET_KIND_TOOL_CALLS = 5;
+}
+
+// ---- Model calls -----------------------------------------------------------
+
+message ModelCallStarted {
+  // Unique within the run; links started/completed/failed.
+  string call_id = 1;
+  // Harness step number this call belongs to.
+  uint32 step = 2;
+  string provider = 3;
+  string model = 4;
+  // 1 for the first try; increases on retry.
+  uint32 attempt = 5;
+}
+
+message ModelCallCompleted {
+  string call_id = 1;
+  FinishReason finish_reason = 2;
+  // Provider's raw stop reason string, kept for debugging.
+  string provider_finish_reason = 3;
+  // Text output of the model for this call.
+  string text = 4;
+  repeated ToolCall tool_calls = 5;
+  // Provider-specific content the harness must replay unchanged on the next
+  // call (e.g. thinking blocks). The harness stores but never interprets it.
+  repeated ProviderBlob provider_blobs = 6;
+  google.protobuf.Duration latency = 7;
+}
+
+// FinishReason is the provider-neutral reason a model call ended.
+enum FinishReason {
+  FINISH_REASON_UNSPECIFIED = 0;
+  FINISH_REASON_END_TURN = 1;
+  FINISH_REASON_TOOL_USE = 2;
+  FINISH_REASON_MAX_TOKENS = 3;
+  FINISH_REASON_REFUSAL = 4;
+  FINISH_REASON_PAUSED = 5;
+  FINISH_REASON_OTHER = 6;
+}
+
+message ModelCallFailed {
+  string call_id = 1;
+  ErrorClass error_class = 2;
+  string message = 3;
+  // Whether the harness will retry this call.
+  bool will_retry = 4;
+  // HTTP status from the provider, if any.
+  int32 http_status = 5;
+}
+
+// ProviderBlob is opaque provider content stored for replay.
+message ProviderBlob {
+  string provider = 1;
+  // Provider-defined kind, e.g. "thinking".
+  string kind = 2;
+  bytes data = 3;
+  // Position among the call's output blocks, so order can be restored.
+  uint32 index = 4;
+}
+
+// ---- Tool calls ------------------------------------------------------------
+
+// ToolCall is a call the model asked for.
+message ToolCall {
+  // Provider's tool-call id, used to match results.
+  string id = 1;
+  // Namespaced tool name, e.g. "fs.read_file".
+  string name = 2;
+  // Arguments as a JSON object.
+  string arguments_json = 3;
+}
+
+message ToolCallRequested {
+  ToolCall call = 1;
+  RiskClass risk_class = 2;
+  // MCP server (or plugin) that provides the tool.
+  string server = 3;
+}
+
+message ToolCallCompleted {
+  string call_id = 1;
+  bool is_error = 2;
+  // Full output, as returned by the tool.
+  bytes output = 3;
+  // Whether the output shown to the model was capped or summarized.
+  bool truncated_for_model = 4;
+  google.protobuf.Duration duration = 5;
+  // Exit code, for tools that run processes.
+  int32 exit_code = 6;
+}
+
+// RiskClass classifies what a tool can affect. Policies are written against
+// risk classes rather than individual tool names.
+enum RiskClass {
+  RISK_CLASS_UNSPECIFIED = 0;
+  RISK_CLASS_READ = 1;
+  RISK_CLASS_WRITE_LOCAL = 2;
+  RISK_CLASS_WRITE_EXTERNAL = 3;
+  RISK_CLASS_EXEC = 4;
+  RISK_CLASS_IRREVERSIBLE = 5;
+}
+
+// ---- Policy and approvals --------------------------------------------------
+
+message PolicyDecided {
+  string call_id = 1;
+  Decision decision = 2;
+  // Rule that produced the decision.
+  string rule_id = 3;
+  string reason = 4;
+  DecisionSource source = 5;
+}
+
+enum Decision {
+  DECISION_UNSPECIFIED = 0;
+  DECISION_ALLOW = 1;
+  DECISION_DENY = 2;
+  DECISION_NEEDS_APPROVAL = 3;
+}
+
+enum DecisionSource {
+  DECISION_SOURCE_UNSPECIFIED = 0;
+  // The harness's fast local allow/deny cache.
+  DECISION_SOURCE_LOCAL = 1;
+  DECISION_SOURCE_CONTROL_PLANE = 2;
+  DECISION_SOURCE_HOOK = 3;
+}
+
+message ApprovalRequested {
+  string approval_id = 1;
+  string call_id = 2;
+  // What the approver is shown.
+  string summary = 3;
+}
+
+message ApprovalResolved {
+  string approval_id = 1;
+  bool approved = 2;
+  // Who approved or rejected (user id, or "policy:<rule>" if automatic).
+  string resolved_by = 3;
+  string comment = 4;
+}
+
+// ---- Recovery and errors ---------------------------------------------------
+
+// Checkpoint marks a point a run can be resumed from.
+message Checkpoint {
+  uint32 step = 1;
+  // Sandbox snapshot taken at this point, if any.
+  string snapshot_ref = 2;
+  // Digest of the folded run state, to detect divergence on resume.
+  string state_digest = 3;
+}
+
+message ErrorOccurred {
+  ErrorClass error_class = 1;
+  string message = 2;
+  // Component that raised the error, e.g. "harness", "toolrouter".
+  string component = 3;
+}
+
+enum ErrorClass {
+  ERROR_CLASS_UNSPECIFIED = 0;
+  ERROR_CLASS_MODEL = 1;
+  ERROR_CLASS_TOOL = 2;
+  ERROR_CLASS_POLICY = 3;
+  ERROR_CLASS_TIMEOUT = 4;
+  ERROR_CLASS_RATE_LIMIT = 5;
+  ERROR_CLASS_SANDBOX = 6;
+  ERROR_CLASS_LOOP_DETECTED = 7;
+  ERROR_CLASS_INTERNAL = 8;
+}

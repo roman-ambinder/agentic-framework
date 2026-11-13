@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go mod tidy check
+        run: make tidy-check
+      - name: proto lint
+        run: make proto-lint
+      - name: generated code is up to date
+        run: make proto-check
+      - name: test
+        run: make test-race
+      - name: build
+        run: make build
+      - name: smoke test
+        run: ./bin/adlc version
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.5.0
+
+  # Fails a pull request that breaks compatibility of the contracts with its base branch.
+  proto-breaking:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: check out base branch
+        run: |
+          git fetch --depth=1 origin "${{ github.base_ref }}"
+          git worktree add "$RUNNER_TEMP/base" FETCH_HEAD
+      - name: buf breaking
+        run: |
+          if [ -f "$RUNNER_TEMP/base/buf.yaml" ]; then
+            make proto-breaking AGAINST="$RUNNER_TEMP/base"
+          else
+            echo "base branch has no contracts yet; skipping"
+          fi
