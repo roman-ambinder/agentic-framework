@@ -1,6 +1,7 @@
 # ADLC — Work Plan
 
 Supersedes the sequencing (not the task content) of `2026-11-13-adlc-m0-m1-plan.md`.
+Implementation briefs, task index and shared interfaces: `docs/impl/` (start with `AGENTS.md` at the repo root).
 Design: `docs/design/2026-11-13-adlc-framework-design.md`.
 
 ## 1. How this plan works
@@ -50,19 +51,17 @@ the event log and a readable trace.
 **Demo:** `adlc run examples/hello.yaml --model fake` and then `--model anthropic`;
 both print a span tree with cost, and `adlc trace <run>` replays it from the log.
 
-| # | Task | Size | Depends on | Done when |
-|---|------|------|-----------|-----------|
-| 0.4 | `ModelAdapter` interface, normalized types (`Message`, `ToolCall`, `ToolResult`, `ModelEvent` with opaque provider blobs), scripted fake adapter | M | 0.2 | Fake replays a scripted conversation; adapter contract test suite exists (runs against the fake) |
-| 0.5 | Harness loop: budgets (steps, tokens, wall-clock, $, tool calls), retry with backoff, stop reasons, `pre_tool`/`post_tool` hooks, writes every step to the event log, checkpoints | L | 0.3, 0.4 | Table test per stop reason on the fake; a run's log folds to the expected `RunState` |
-| **0.5b** | **Moved forward:** Anthropic adapter, minimal (non-streaming first, tool calls, refusal handling, usage → `Cost`) | M | 0.4 | Passes the adapter contract suite with recorded responses; one live smoke test under `-tags live` |
-| 0.6 | `PolicyClient` interface + local static rules on risk classes | S | 0.5 | A denied call ends the run with `denied`; decision recorded as `policy_decided` |
-| 0.7 | Tool router: MCP client (stdio), namespacing, risk class from config, output cap | L | 0.5 | Talks to a test MCP server; oversized output capped for the model, full output in the log |
-| 0.8 | `tools/fs` MCP server (read/list/write under a root) | M | 0.7 | Path escapes (`../`, symlinks) rejected in tests |
-| 0.9 | `agent.yaml` schema, loader, validation; `adlc run` command | M | 0.5, 0.7 | Bad configs fail with clear messages; `adlc run` works on the fake |
-| 0.10 | Observability v0: event log → OpenTelemetry spans (stdout exporter), `adlc trace` | M | 0.3, 0.9 | Demo above prints a span tree with costs |
-| 0.11 | Cross-language check: `plugin.proto` `Hook` service, plugin launcher, one Python hook plugin | M | 0.5 | Integration test: the Python hook blocks a tool call |
+Tasks (sizes, dependencies and a brief for each: `docs/impl/README.md`):
 
-**Critical path:** 0.4 → 0.5 → 0.7 → 0.9 → 0.10. 0.5b, 0.6, 0.8 and 0.11 can be done in any order once their dependency is merged.
+- **0.0** upgrade to Go 1.26 — needed first: no release of the Anthropic Go SDK v2 supports Go 1.24
+- **0.4** model types, `Adapter` interface, scripted fake model
+- **0.6** policy client with static rules · **0.7.1** tool router core · **0.7.2** MCP tool router · **0.8** fs MCP server
+- **0.5.1–0.5.4** harness: core loop, budgets, retries, hooks and checkpoints
+- **0.5b** minimal Anthropic adapter (moved forward from M1)
+- **0.9.1** `agent.yaml` loader · **0.9.2** `adlc run` · **0.10** trace export and `adlc trace`
+- **0.11.1–0.11.2** plugin contract, Go launcher, Python hook plugin
+
+**Critical path:** 0.0 → 0.4 → 0.6 / 0.7.1 → 0.5.1 → 0.5.4 → 0.9.2 → 0.10.
 
 **Gate G0 (after M0):** does a real model complete a simple file task through
 the loop without harness bugs? Record: steps used, tokens, cost, any stop reason
@@ -73,12 +72,10 @@ other than `completed`. If the loop needs rework, fix it before M1.
 Fixtures don't depend on the framework, so build them early: when the coder
 agent first runs, there's a score waiting for it.
 
-| # | Task | Size | Depends on | Done when |
-|---|------|------|-----------|-----------|
-| E.1 | Fixture repo: a small Go project (a few packages, a real test suite, about 1–2k lines) | M | — | `go test ./...` passes on the clean repo |
-| E.2 | 10 seeded bugs, graded easy / medium / hard: each is a patch that breaks the repo, an issue text written as a user would, and hidden tests that fail on the bug and pass on the fix | L | E.1 | For each bug: hidden tests fail with the bug applied, pass on the reference fix |
-| E.3 | Fixture format + loader (`suites/go-bugs/<id>/{issue.md, bug.patch, hidden_test.go, meta.yaml}`) | S | E.2 | Loader validates every fixture in CI |
-| E.4 | Baseline: run each fixture by hand with a general-purpose coding agent, note what it takes | S | E.2 | Short notes per fixture; tells you whether the suite is too easy or too hard |
+- **E.1** fixture repository (small stdlib-only Go project, its own module)
+- **E.2** 10 seeded bugs (3 easy, 4 medium, 3 hard), each with issue text, bug patch, reference fix and hidden tests
+- **E.3** fixture format, loader, and a check that every bug's hidden tests fail with the bug and pass with the fix
+- **E.4** manual baseline, which sets the numbers for gate G1
 
 ## 5. M1 — One agent fixes one issue
 
@@ -88,21 +85,12 @@ eval suite, with both providers compared.
 **Demo:** `adlc eval suites/go-bugs --providers anthropic,openai` prints pass@1,
 cost and steps per fixture and provider.
 
-| # | Task | Size | Depends on | Done when |
-|---|------|------|-----------|-----------|
-| 1.1 | Anthropic adapter, full: streaming, prompt caching, `CountTokens`, provider blobs replayed unchanged | M | 0.5b | Contract suite passes; cache-read tokens show up in cost events across steps |
-| 1.2 | OpenAI adapter (configurable base URL) | M | 0.4 | Same contract suite passes |
-| 1.3 | Model router: per-role / per-step model choice, fallback to the other provider | S | 1.1, 1.2 | Fallback test with a failing fake |
-| 1.4 | Docker sandbox backend: create/exec/destroy, CPU/memory limits, network off, repo mounted as a working copy | L | 0.5 | `go test` runs in the container; outbound network fails |
-| 1.5 | `tools/shell`, `tools/git`, `tools/search` running inside the sandbox | M | 0.7, 1.4 | Agent can only run commands inside the container |
-| 1.6 | Context manager v1: per-section token budgets, compaction of old tool output, stable prefix for caching | L | 0.5, 1.1 | A long run stays under the context limit; cache hit rate visible in `adlc cost` |
-| 1.7 | Resume a crashed run from its last checkpoint (uses `RunState.Digest`) | M | 0.5, 1.4 | Kill mid-run, `adlc resume <run>` completes it |
-| 1.8 | Eval runner: apply bug, run agent, apply hidden tests, record results as events | M | E.3, 1.5 | `adlc eval` runs one fixture end to end |
-| 1.9 | Graders: outcome (hidden tests, `go vet`, diff applies) + trajectory (steps, wasted calls, policy violations); JSON report | M | 1.8 | Report shows both; JSON usable in CI |
-| 1.10 | `agents/sdlc/coder.yaml` + prompt; iterate against the suite | L | 1.8 | Meets the threshold set at G1 |
-| 1.11 | `adlc cost`: per run / model / fixture from cost events | S | 0.3 | Totals match the sum of events |
+- **1.1** Anthropic adapter: streaming, prompt caching, token counting · **1.2** OpenAI adapter · **1.3** model router and fallback
+- **1.4.1** sandbox interface and Docker backend · **1.4.2** isolation (network off, limits, copied workspace) · **1.5** shell/git/search tools in the sandbox
+- **1.6.1** context manager budgets and compaction · **1.6.2** stable prefix for caching
+- **1.7** resume a crashed run · **1.8** eval runner · **1.9** graders and report · **1.10** coder agent · **1.11** `adlc cost`
 
-**Critical path:** 1.4 → 1.5 → 1.8 → 1.10. Adapters (1.1–1.3) and context (1.6) run alongside.
+**Critical path:** 1.4.1 → 1.4.2 → 1.5 → 1.8 → 1.9 → 1.10. Adapters (1.1–1.3) and context (1.6.x) run alongside.
 
 **Gate G1 (after M1) — decides what M2 is.** Measure on the full suite:
 pass@1 per difficulty, median cost and steps per fixture, and the top 3 causes of failure.
@@ -153,13 +141,15 @@ Set the numeric thresholds after E.4, once the suite's difficulty is known.
 - **Security of the sandbox:** network off by default, no host credentials mounted, changes leave only as a diff. Review this at the end of M1 before any write-external tool exists.
 - **Releases:** tag `v0.1.0` after M0, `v0.2.0` after M1; changelog from PR titles.
 - **Docs:** each milestone updates the design doc where reality differs from it.
-- **Go version:** the repo targets Go 1.24, which has held back `buf`, `modernc.org/sqlite` and other tools. Decide before M1 whether to move to a newer Go.
+- **Go version:** decided — move to Go 1.26 (task 0.0). Go 1.24 held back `buf`, `modernc.org/sqlite`, OpenTelemetry and gRPC, and no release of the Anthropic Go SDK v2 supports it.
 
 ## 8. Decision log
 
 | Date | Gate / decision | Result |
 |------|-----------------|--------|
 | 2026-11-13 | Pull one real adapter (0.5b) into M0; start the eval track alongside M0 | Adopted in this plan |
+| 2026-11-13 | Move to Go 1.26 before further M0 work (task 0.0) | Every Anthropic Go SDK v2 release needs Go ≥ 1.25; latest OpenAI Go SDK v3 needs Go 1.26 |
+| 2026-11-13 | Split large tasks (0.5, 0.7, 0.9, 0.11, 1.4, 1.6) and write an implementation brief per task (`docs/impl/`) | So less capable models can implement tasks without making design decisions |
 
 ## 9. Risks
 
