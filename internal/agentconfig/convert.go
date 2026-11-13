@@ -101,21 +101,42 @@ func (a *Agent) ContextBudget() contextmgr.Budget {
 	return contextmgr.Budget{MaxInputTokens: a.Context.MaxInputTokens, KeepRecentSteps: a.Context.KeepRecentSteps}
 }
 
-// PolicyEngine builds the static policy, rules in file order.
+// PolicyEngine builds the static policy: included rules first, then the
+// agent's own rules, each in file order.
 // Call only after Validate succeeded.
 func (a *Agent) PolicyEngine() *policy.Static {
-	rules := make([]policy.Rule, 0, len(a.Policy.Rules))
+	rules := make([]policy.Rule, 0, len(a.Policy.Included)+len(a.Policy.Rules))
+	for _, ir := range a.Policy.Included {
+		rules = append(rules, toPolicyRule(ir.Rule))
+	}
 	for _, r := range a.Policy.Rules {
-		var risk adlcv1.RiskClass
-		if r.Risk != "" {
-			risk, _ = policy.ParseRiskClass(r.Risk)
-		}
-		d, _ := policy.ParseDecision(r.Decision)
-		rules = append(rules, policy.Rule{ID: r.ID, Risk: risk, Tool: r.Tool, Decision: d})
+		rules = append(rules, toPolicyRule(r))
 	}
 	def, _ := policy.ParseDecision(a.Policy.Default)
 	s, _ := policy.NewStatic(rules, def)
 	return s
+}
+
+// toPolicyRule converts a validated Rule.
+func toPolicyRule(r Rule) policy.Rule {
+	var risk adlcv1.RiskClass
+	if r.Risk != "" {
+		risk, _ = policy.ParseRiskClass(r.Risk)
+	}
+	d, _ := policy.ParseDecision(r.Decision)
+	out := policy.Rule{ID: r.ID, Risk: risk, Tool: r.Tool, Decision: d}
+	if r.Args != nil {
+		out.Args = make(map[string]policy.ArgMatcher, len(r.Args))
+		for k, m := range r.Args {
+			out.Args[k] = m.toPolicy()
+		}
+	}
+	return out
+}
+
+// toPolicy converts the YAML matcher.
+func (m ArgMatcher) toPolicy() policy.ArgMatcher {
+	return policy.ArgMatcher{Glob: m.Glob, Prefix: m.Prefix, Regex: m.Regex, In: m.In}
 }
 
 // ToolServers returns the tool servers with parsed risk classes.
