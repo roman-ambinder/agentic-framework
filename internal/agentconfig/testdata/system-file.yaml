@@ -1,0 +1,7 @@
+name: tiny
+version: 1
+model:
+  provider: fake
+system_file: prompt.md
+policy:
+  default: deny
