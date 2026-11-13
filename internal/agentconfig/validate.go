@@ -51,21 +51,43 @@ func (a *Agent) Validate() error {
 }
 
 func (a *Agent) validateModel(p *problems) {
-	validateModelFields(p, "model", a.Model, false)
+	validateModelFields(p, "model", a.Model, primaryModel)
 	for i, f := range a.Model.Fallbacks {
 		path := fmt.Sprintf("model.fallbacks[%d]", i)
-		validateModelFields(p, path, f, true)
+		validateModelFields(p, path, f, fallbackModel)
 		if len(f.Fallbacks) > 0 {
 			p.add(path+".fallbacks", "not allowed")
+		}
+		if f.Roles.Plan != nil {
+			p.add(path+".roles", "not allowed")
 		}
 		if f.Provider == a.Model.Provider && f.Name == a.Model.Name {
 			p.add(path, "repeats the primary provider and name")
 		}
 	}
+	if r := a.Model.Roles.Plan; r != nil {
+		validateModelFields(p, "model.roles.plan", *r, roleModel)
+		if len(r.Fallbacks) > 0 {
+			p.add("model.roles.plan.fallbacks", "not allowed")
+		}
+		if r.Roles.Plan != nil {
+			p.add("model.roles.plan.roles", "not allowed")
+		}
+	}
 }
 
-// validateModelFields checks one model; path is "model" or "model.fallbacks[i]".
-func validateModelFields(p *problems, path string, m Model, fallback bool) {
+// modelKind says where a Model appears in the agent file.
+type modelKind int
+
+const (
+	primaryModel modelKind = iota
+	fallbackModel
+	roleModel
+)
+
+// validateModelFields checks one model; path is "model", "model.fallbacks[i]"
+// or "model.roles.plan".
+func validateModelFields(p *problems, path string, m Model, kind modelKind) {
 	switch m.Provider {
 	case "fake", "anthropic", "openai":
 	default:
@@ -74,10 +96,13 @@ func validateModelFields(p *problems, path string, m Model, fallback bool) {
 	if m.Name == "" {
 		p.add(path+".name", "is required")
 	}
-	if fallback {
-		validateFallbackTuning(p, path, m)
-	} else {
+	switch kind {
+	case primaryModel:
 		validateTuning(p, path, m)
+	case fallbackModel:
+		validateFallbackTuning(p, path, m)
+	case roleModel:
+		validateRoleTuning(p, path, m)
 	}
 	fields := []struct{ name, val string }{
 		{"input_per_mtok", m.Pricing.InputPerMTok},
@@ -97,11 +122,25 @@ func validateTuning(p *problems, path string, m Model) {
 	if m.MaxTokens < 1 || m.MaxTokens > 1000000 {
 		p.add(path+".max_tokens", "must be between 1 and 1000000")
 	}
-	switch m.Effort {
+	validateEffort(p, path+".effort", m.Effort)
+}
+
+// validateEffort checks an effort level; "" is allowed.
+func validateEffort(p *problems, path, effort string) {
+	switch effort {
 	case "", "low", "medium", "high", "xhigh", "max":
 	default:
-		p.add(path+".effort", "must be one of low, medium, high, xhigh, max, got %q", m.Effort)
+		p.add(path, "must be one of low, medium, high, xhigh, max, got %q", effort)
 	}
+}
+
+// validateRoleTuning rejects max_tokens on a role (the plan call uses
+// planning.max_tokens) and checks its effort.
+func validateRoleTuning(p *problems, path string, m Model) {
+	if m.MaxTokens != 0 {
+		p.add(path+".max_tokens", "not supported on roles (planning.max_tokens is used)")
+	}
+	validateEffort(p, path+".effort", m.Effort)
 }
 
 // validateFallbackTuning rejects max_tokens and effort on a fallback: the

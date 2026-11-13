@@ -70,16 +70,23 @@ type PlanConfig struct {
 	Enabled   bool
 	Prompt    string // sent after the task in the plan request; "" = DefaultPlanPrompt
 	MaxTokens int    // output limit of the plan call; 0 = DefaultPlanMaxTokens
+	// Model is the model id of the plan call (task Q.5); "" = Config.Model,
+	// and then Config.Effort is used as well.
+	Model string
+	// Effort of the plan call; used only when Model is set ("" = adapter default).
+	Effort string
 }
 
 // Deps are the run's collaborators.
 type Deps struct {
-	Log    Log
-	Model  model.Adapter
-	Tools  toolrouter.Router
-	Policy policy.Client
-	Now    func() time.Time                                 // default time.Now
-	Sleep  func(ctx context.Context, d time.Duration) error // default: timer + ctx
+	Log   Log
+	Model model.Adapter
+	// PlanModel is the adapter for the plan call (task Q.5); nil = Model.
+	PlanModel model.Adapter
+	Tools     toolrouter.Router
+	Policy    policy.Client
+	Now       func() time.Time                                 // default time.Now
+	Sleep     func(ctx context.Context, d time.Duration) error // default: timer + ctx
 	// KillSwitch, if set, is asked before every model call and every tool
 	// call whether the run must stop (task C.3). nil = no kill switch.
 	KillSwitch KillSwitch
@@ -144,6 +151,9 @@ func validate(cfg Config, deps Deps) error {
 		return errors.New("harness: deps: tools is nil")
 	case deps.Policy == nil:
 		return errors.New("harness: deps: policy is nil")
+	}
+	if deps.PlanModel != nil && cfg.Plan.Model == "" {
+		return errors.New("harness: config: plan model is empty but deps.PlanModel is set")
 	}
 	if cfg.Plan.MaxTokens < 0 {
 		return errors.New("harness: config: plan max tokens must be >= 0")
