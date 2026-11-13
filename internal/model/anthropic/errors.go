@@ -20,6 +20,9 @@ func classify(ctx context.Context, err error) error {
 	}
 	var apiErr *sdk.Error
 	if errors.As(err, &apiErr) {
+		if apiErr.StatusCode >= 200 && apiErr.StatusCode <= 299 {
+			return classifyStreamError(apiErr, err)
+		}
 		class, retryable := model.ClassifyHTTP(apiErr.StatusCode)
 		return &model.Error{Class: class, HTTPStatus: apiErr.StatusCode, Retryable: retryable, Err: err}
 	}
@@ -29,4 +32,18 @@ func classify(ctx context.Context, err error) error {
 		return &model.Error{Class: adlcv1.ErrorClass_ERROR_CLASS_TIMEOUT, Retryable: true, Err: err}
 	}
 	return &model.Error{Class: adlcv1.ErrorClass_ERROR_CLASS_MODEL, Err: err}
+}
+
+// classifyStreamError handles an error event that arrives inside a 200
+// response stream: the SDK reports it as an *sdk.Error with a 2xx status, so
+// the status says nothing and the error type decides.
+func classifyStreamError(apiErr *sdk.Error, err error) error {
+	switch string(apiErr.Type()) {
+	case "rate_limit_error":
+		return &model.Error{Class: adlcv1.ErrorClass_ERROR_CLASS_RATE_LIMIT, Retryable: true, Err: err}
+	case "overloaded_error", "api_error":
+		return &model.Error{Class: adlcv1.ErrorClass_ERROR_CLASS_MODEL, Retryable: true, Err: err}
+	default:
+		return &model.Error{Class: adlcv1.ErrorClass_ERROR_CLASS_MODEL, Err: err}
+	}
 }

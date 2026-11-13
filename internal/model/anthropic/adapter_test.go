@@ -55,12 +55,73 @@ func newFakeAPI(t *testing.T, statuses []int, bodies ...string) *fakeAPI {
 		if len(f.bodies) > 0 {
 			body = f.bodies[min(i, len(f.bodies)-1)]
 		}
-		w.Header().Set("Content-Type", "application/json")
+		if status == http.StatusOK && r.URL.Path == "/v1/messages" {
+			body = messageToSSE(body)
+			w.Header().Set("Content-Type", "text/event-stream")
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+		}
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
 	}))
 	t.Cleanup(f.srv.Close)
 	return f
+}
+
+// messageToSSE turns a complete Message JSON (the testdata/*.json files and the
+// contract bodies) into the event stream the adapter now consumes.
+func messageToSSE(body string) string {
+	var m struct {
+		Content    []map[string]any `json:"content"`
+		StopReason string           `json:"stop_reason"`
+		Usage      map[string]any   `json:"usage"`
+	}
+	if err := json.Unmarshal([]byte(body), &m); err != nil {
+		return body
+	}
+	var sb strings.Builder
+	emit := func(typ string, v map[string]any) {
+		v["type"] = typ
+		b, _ := json.Marshal(v)
+		fmt.Fprintf(&sb, "event: %s\ndata: %s\n\n", typ, b)
+	}
+	var start map[string]any
+	_ = json.Unmarshal([]byte(body), &start)
+	start["content"] = []any{}
+	start["stop_reason"] = nil
+	emit("message_start", map[string]any{"message": start})
+	for i, c := range m.Content {
+		blk := map[string]any{}
+		for k, v := range c {
+			blk[k] = v
+		}
+		var deltas []map[string]any
+		switch c["type"] {
+		case "text":
+			blk["text"] = ""
+			deltas = append(deltas, map[string]any{"type": "text_delta", "text": c["text"]})
+		case "tool_use":
+			in, _ := json.Marshal(c["input"])
+			blk["input"] = map[string]any{}
+			deltas = append(deltas, map[string]any{"type": "input_json_delta", "partial_json": string(in)})
+		case "thinking":
+			blk["thinking"], blk["signature"] = "", ""
+			deltas = append(deltas,
+				map[string]any{"type": "thinking_delta", "thinking": c["thinking"]},
+				map[string]any{"type": "signature_delta", "signature": c["signature"]})
+		}
+		emit("content_block_start", map[string]any{"index": i, "content_block": blk})
+		for _, d := range deltas {
+			emit("content_block_delta", map[string]any{"index": i, "delta": d})
+		}
+		emit("content_block_stop", map[string]any{"index": i})
+	}
+	emit("message_delta", map[string]any{
+		"delta": map[string]any{"stop_reason": m.StopReason, "stop_sequence": nil},
+		"usage": map[string]any{"output_tokens": m.Usage["output_tokens"]},
+	})
+	emit("message_stop", map[string]any{})
+	return sb.String()
 }
 
 func (f *fakeAPI) adapter() *Adapter { return New(Options{APIKey: "test-key", BaseURL: f.srv.URL}) }
@@ -137,7 +198,7 @@ func TestProviderAndCapabilities(t *testing.T) {
 	if a.Provider() != "anthropic" {
 		t.Errorf("Provider = %q", a.Provider())
 	}
-	want := model.Caps{ToolCalling: true, PromptCaching: true, Streaming: false, MaxContextTokens: 123}
+	want := model.Caps{ToolCalling: true, PromptCaching: true, Streaming: true, MaxContextTokens: 123}
 	if got := a.Capabilities(); got != want {
 		t.Errorf("Capabilities = %+v, want %+v", got, want)
 	}
