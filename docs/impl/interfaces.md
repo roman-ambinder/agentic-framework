@@ -620,6 +620,19 @@ func VerifyCheckpoints(events []*adlcv1.Event) error
 
 // Resume continues a run that stopped without a final run_completed (task 1.7).
 func Resume(ctx context.Context, cfg Config, deps Deps) (*eventlog.RunState, error)
+
+// Fork starts cfg.RunID from the transcript of from.RunID up to and including
+// the checkpoint of step from.AtStep, then continues it with cfg (task Q.3).
+type ForkPoint struct {
+	RunID  string
+	AtStep uint32
+}
+func Fork(ctx context.Context, cfg Config, deps Deps, from ForkPoint) (*eventlog.RunState, error)
+func ForkEvents(events []*adlcv1.Event, atStep uint32) ([]*adlcv1.Event, error)
+var (
+	ErrNoCheckpoint = errors.New("harness: no checkpoint for that step")
+	ErrRunExists    = errors.New("harness: run already exists")
+)
 var (
 	ErrRunFinished        = errors.New("harness: run already finished")
 	ErrRunPaused          = errors.New("harness: run is waiting for approval")
