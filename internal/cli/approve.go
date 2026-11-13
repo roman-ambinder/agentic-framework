@@ -131,6 +131,7 @@ func newApproveCmd() *cobra.Command {
 	f.StringVar(&o.comment, "comment", "", "comment recorded with the answer")
 	f.StringVar(&o.by, "by", "", "who answers (default: $USER, else \"local\")")
 	f.StringVar(&o.db, "db", defaultDBPath, "event log file")
+	f.StringVar(&o.controlDB, "control-db", defaultControlDBPath, "control database (kill switches)")
 	f.StringVar(&o.fakeScript, "fake-script", "", "fake model script (provider fake only)")
 	f.StringVar(&o.modelName, "model-name", "", "overrides model.name from the agent file")
 	return cmd
@@ -206,6 +207,11 @@ func continueRun(ctx context.Context, o approveOptions, store *eventlog.Store, r
 	if err != nil {
 		return nil, err
 	}
+	ks, closeKS, err := openKillSwitch(ctx, o.controlDB)
+	if err != nil {
+		return nil, err
+	}
+	defer closeKS()
 	if err := attachSandbox(ctx, a, runID, openSandbox); err != nil {
 		return nil, err
 	}
@@ -214,5 +220,6 @@ func continueRun(ctx context.Context, o approveOptions, store *eventlog.Store, r
 		return nil, err
 	}
 	defer func() { _ = cleanup() }()
+	deps.KillSwitch = ks
 	return harness.Approve(ctx, cfg, deps, res)
 }

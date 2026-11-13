@@ -22,6 +22,8 @@ import (
 // runOptions are the flags of `adlc run`.
 type runOptions struct {
 	agentPath, task, db, fakeScript, runID, modelName string
+	// controlDB is the control database (kill switches); a missing file means no kill switch.
+	controlDB string
 	// startHook starts one hook plugin; nil means startPluginHook. Tests set it.
 	startHook hookStarter
 	// workspaceOut and keepSandbox only apply to `adlc run` with a sandbox.
@@ -45,6 +47,7 @@ func newRunCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&o.task, "task", "", "first user message (required)")
 	f.StringVar(&o.db, "db", defaultDBPath, "event log file")
+	f.StringVar(&o.controlDB, "control-db", defaultControlDBPath, "control database (kill switches)")
 	f.StringVar(&o.fakeScript, "fake-script", "", "fake model script (provider fake only)")
 	f.StringVar(&o.runID, "run-id", "", "run id (default: generated)")
 	f.StringVar(&o.modelName, "model-name", "", "overrides model.name from the agent file")
@@ -103,6 +106,11 @@ func runAgentWith(ctx context.Context, o runOptions, stdout io.Writer, openSandb
 		return &exitError{code: 1, err: err}
 	}
 	defer store.Close()
+	ks, closeKS, err := openKillSwitch(ctx, o.controlDB)
+	if err != nil {
+		return &exitError{code: 1, err: err}
+	}
+	defer closeKS()
 	sb, err := startRunSandbox(ctx, a, runID, openSandbox)
 	if err != nil {
 		return &exitError{code: 1, err: err}
@@ -114,6 +122,7 @@ func runAgentWith(ctx context.Context, o runOptions, stdout io.Writer, openSandb
 		return &exitError{code: 1, err: err}
 	}
 	defer func() { _ = cleanup() }()
+	deps.KillSwitch = ks
 	state, err := harness.Run(ctx, cfg, deps)
 	if err != nil {
 		sb.keepForResume(stdout)

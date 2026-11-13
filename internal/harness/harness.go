@@ -57,6 +57,9 @@ type Deps struct {
 	Policy policy.Client
 	Now    func() time.Time                                 // default time.Now
 	Sleep  func(ctx context.Context, d time.Duration) error // default: timer + ctx
+	// KillSwitch, if set, is asked before every model call and every tool
+	// call whether the run must stop (task C.3). nil = no kill switch.
+	KillSwitch KillSwitch
 }
 
 // Run executes a new run until it stops and returns its final state.

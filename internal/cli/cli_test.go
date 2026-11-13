@@ -95,3 +95,28 @@ func TestCommandsShareDefaultDB(t *testing.T) {
 		})
 	}
 }
+
+func TestCommandsShareDefaultControlDB(t *testing.T) {
+	if defaultControlDBPath != ".adlc/control.db" {
+		t.Fatalf("defaultControlDBPath = %q", defaultControlDBPath)
+	}
+	cmds := map[string]*cobra.Command{
+		"run":     newRunCmd(),
+		"resume":  newResumeCmd(),
+		"approve": newApproveCmd(),
+		"kill":    newKillCmd(),
+		"unkill":  newUnkillCmd(),
+		"kills":   newKillsCmd(),
+	}
+	for name, cmd := range cmds {
+		t.Run(name, func(t *testing.T) {
+			f := cmd.Flags().Lookup("control-db")
+			if f == nil {
+				t.Fatal("no --control-db flag")
+			}
+			if f.DefValue != defaultControlDBPath {
+				t.Errorf("--control-db default = %q, want %q", f.DefValue, defaultControlDBPath)
+			}
+		})
+	}
+}
