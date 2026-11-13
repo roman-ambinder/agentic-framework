@@ -7,10 +7,12 @@ COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE     ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS  := -s -w -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT) -X $(PKG).Date=$(DATE)
 
-# Never let the go command silently download a newer toolchain.
-export GOTOOLCHAIN := local
+# Use exactly this Go version; the go command downloads it if missing.
+export GOTOOLCHAIN := go1.26.11
 
-BUF      := go tool -modfile=tooling/go.mod buf
+TOOL     := go tool -modfile=tooling/go.mod
+BUF      := $(TOOL) buf
+LINT     := $(TOOL) golangci-lint
 # Baseline for the schema compatibility check: a git ref or a directory.
 AGAINST  ?= .git\#branch=main
 
@@ -30,10 +32,10 @@ test-race: ## Run unit tests with the race detector
 	go test -race ./...
 
 lint: ## Run golangci-lint
-	golangci-lint run ./...
+	$(LINT) run ./...
 
 fmt: ## Format code
-	golangci-lint fmt ./...
+	$(LINT) fmt ./...
 
 # tooling/go.mod is deliberately NOT tidied: `go mod tidy` there pulls in the
 # newest versions of modules used only by the tools' own tests, which can
