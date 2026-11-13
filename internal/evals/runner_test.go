@@ -199,7 +199,7 @@ func TestRunOneDestroysSandboxes(t *testing.T) {
 	}
 }
 
-func TestRunOneBrokenGitStillGraded(t *testing.T) {
+func TestRunOneDeletedAgentGitStillGraded(t *testing.T) {
 	env := newRunnerEnv(t, func(ctx context.Context, ar AgentRun) (*eventlog.RunState, error) {
 		_, err := ar.Sandbox.Exec(ctx, ar.Handle, []string{"sh", "-c", fixCmd + " && rm -rf .git"}, time.Minute)
 		return completed(), err
@@ -208,7 +208,9 @@ func TestRunOneBrokenGitStillGraded(t *testing.T) {
 	if res.Error != "" || !res.Solved() {
 		t.Errorf("Error = %q, Hidden = %+v", res.Error, res.Hidden)
 	}
-	if res.ChangedFiles != nil || !strings.Contains(env.out.String(), "git diff failed") {
-		t.Errorf("ChangedFiles = %v, out = %q", res.ChangedFiles, env.out.String())
+	// Changed files come from the host-side repository, so deleting the
+	// agent's .git does not hide what changed.
+	if want := []string{"calc/calc.go"}; !slices.Equal(res.ChangedFiles, want) {
+		t.Errorf("ChangedFiles = %v, want %v (out = %q)", res.ChangedFiles, want, env.out.String())
 	}
 }

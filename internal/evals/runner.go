@@ -163,7 +163,7 @@ func (res *Result) run(ctx context.Context, r *Runner, bug Bug, agent *agentconf
 		res.Error = "extract: " + err.Error()
 		return
 	}
-	res.ChangedFiles = r.changedFiles(ctx, bug, after)
+	res.ChangedFiles = r.changedFiles(ctx, bug, filepath.Join(before, ".git"), after)
 	res.Hidden, err = r.grade(ctx, spec, bug, after)
 	if err != nil {
 		res.Error = err.Error()
@@ -201,13 +201,17 @@ func (r *Runner) grade(ctx context.Context, spec sandbox.Spec, bug Bug, dir stri
 }
 
 // changedFiles lists the files the agent changed relative to the base commit.
-// A broken .git leaves the list nil; that is logged, not an error.
-func (r *Runner) changedFiles(ctx context.Context, bug Bug, dir string) []string {
-	if _, err := gitOutput(ctx, dir, "add", "-A"); err != nil {
+// gitDir is the host-side repository that PrepareWorkspace created and that
+// never entered the sandbox; workTree is what the agent left behind. Git reads
+// its config from gitDir only, so nothing the agent wrote (.git/config hooks,
+// filter drivers, fsmonitor) can run a program on the host.
+func (r *Runner) changedFiles(ctx context.Context, bug Bug, gitDir, workTree string) []string {
+	repo := []string{"--git-dir=" + gitDir, "--work-tree=" + workTree}
+	if _, err := gitOutput(ctx, workTree, append(repo, "add", "-A")...); err != nil {
 		r.logf("%s git diff failed: %v", bug.ID, err)
 		return nil
 	}
-	out, err := gitOutput(ctx, dir, "diff", "--cached", "--name-only", "HEAD")
+	out, err := gitOutput(ctx, workTree, append(repo, "diff", "--cached", "--name-only", "HEAD")...)
 	if err != nil {
 		r.logf("%s git diff failed: %v", bug.ID, err)
 		return nil
@@ -222,8 +226,9 @@ func (r *Runner) changedFiles(ctx context.Context, bug Bug, dir string) []string
 	return files
 }
 
-// gitOutput runs git in dir and returns stdout. The directory was written by
-// an agent, so repository config that runs programs is switched off.
+// gitOutput runs git in dir and returns stdout. Callers pass --git-dir to a
+// trusted repository; program-running config is also switched off as a
+// second line of defence.
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
 	full := append([]string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
