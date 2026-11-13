@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -271,4 +272,38 @@ func TestForkedRunCanBeResumed(t *testing.T) {
 	}
 	r := resumeOK(t, store, forkCfg(), defaultDeps(t), textTurn("resumed"))
 	wantStop(t, r.state, adlcv1.StopReason_STOP_REASON_COMPLETED, "")
+}
+
+func TestForkOfPlannedRunKeepsPlanAndDoesNotReplan(t *testing.T) {
+	turns := []model.FakeTurn{planTurn(), toolTurn(readCall("t1", "a")), toolTurn(readCall("t2", "b")), textTurn("done")}
+	store := newLog(t)
+	deps := defaultDeps(t)
+	deps.Log, deps.Model = store, model.NewFake(turns...)
+	if _, err := Run(context.Background(), planConfig(), deps); err != nil {
+		t.Fatal(err)
+	}
+	cfg := forkCfg()
+	cfg.Plan = PlanConfig{Enabled: true}
+	st, fake := forkOK(t, store, cfg, 1, textTurn("forked"))
+	wantStop(t, st, adlcv1.StopReason_STOP_REASON_COMPLETED, "")
+	reqs := fake.Requests()
+	if len(reqs) != 1 {
+		t.Fatalf("%d model calls after the fork, want 1 (no second plan)", len(reqs))
+	}
+	if len(reqs[0].Tools) == 0 {
+		t.Fatal("the first call after the fork has no tools: it was a plan call")
+	}
+	if !strings.Contains(fmt.Sprint(reqs[0].Messages), "1. read a.go") {
+		t.Fatalf("plan missing from the forked transcript: %+v", reqs[0].Messages)
+	}
+	evs := readAll(t, store, "f1")
+	var next *adlcv1.ModelCallStarted
+	for _, ev := range evs {
+		if s := ev.GetModelCallStarted(); s != nil {
+			next = s
+		}
+	}
+	if next.GetCallId() != "m2" || next.GetStep() != 2 {
+		t.Fatalf("last model call = %v, want m2 at step 2", next)
+	}
 }
