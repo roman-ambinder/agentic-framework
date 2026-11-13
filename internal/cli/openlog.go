@@ -10,6 +10,10 @@ import (
 	"github.com/roman-ambinder/agentic-framework/internal/eventlog"
 )
 
+// defaultDBPath is the default --db of every command that reads or writes the
+// event log.
+const defaultDBPath = ".adlc/events.db"
+
 // openExistingLog opens an event log for reading. Unlike eventlog.Open it
 // refuses a path that does not exist, so a typo in --db is reported instead
 // of silently creating an empty log.
