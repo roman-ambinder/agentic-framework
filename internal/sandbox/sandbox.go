@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -40,6 +41,10 @@ const MaxOutputBytes = 8 << 20 // 8 MiB
 
 // TruncatedMarker is appended to Stdout/Stderr when they were capped.
 const TruncatedMarker = "\n[output truncated by sandbox]\n"
+
+// SandboxIDPlaceholder in a tool server's command line is replaced with the
+// sandbox's id by whoever starts the servers after creating the sandbox.
+const SandboxIDPlaceholder = "{{sandbox_id}}"
 
 var (
 	// ErrInvalidSpec means Create was called with a bad Spec.
@@ -117,4 +122,14 @@ func CapOutput(b []byte, max int) []byte {
 	out := make([]byte, 0, max+len(TruncatedMarker))
 	out = append(out, b[:max]...)
 	return append(out, TruncatedMarker...)
+}
+
+// ExpandArgs returns a copy of args with every SandboxIDPlaceholder (also
+// inside a longer argument) replaced by h.ID.
+func ExpandArgs(args []string, h Handle) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = strings.ReplaceAll(a, SandboxIDPlaceholder, h.ID)
+	}
+	return out
 }

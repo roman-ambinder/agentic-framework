@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -58,5 +59,17 @@ func TestCapOutput(t *testing.T) {
 				t.Fatalf("CapOutput = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestExpandArgs(t *testing.T) {
+	in := []string{"--sandbox", "{{sandbox_id}}", "x={{sandbox_id}}", "{{sandbox_id}}:{{sandbox_id}}"}
+	got := ExpandArgs(in, Handle{ID: "c1"})
+	want := []string{"--sandbox", "c1", "x=c1", "c1:c1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ExpandArgs() = %q, want %q", got, want)
+	}
+	if in[1] != "{{sandbox_id}}" || in[2] != "x={{sandbox_id}}" {
+		t.Fatalf("input slice was modified: %q", in)
 	}
 }

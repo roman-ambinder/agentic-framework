@@ -21,6 +21,7 @@ func newToolCmd() *cobra.Command {
 		Short: "Run a built-in MCP tool server over stdio",
 	}
 	cmd.AddCommand(newToolFSCmd())
+	addSandboxToolCmds(cmd)
 	return cmd
 }
 
