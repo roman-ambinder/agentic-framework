@@ -1,0 +1,83 @@
+name: eval-live
+
+# Runs the real evaluation (real model calls, real money) on a GitHub runner.
+# Manual only: never on push or pull_request. See docs/impl/live-eval.md.
+on:
+  workflow_dispatch:
+    inputs:
+      agents:
+        description: Agent files, comma separated
+        default: agents/sdlc/coder.anthropic.yaml
+      bugs:
+        description: Bug ids, comma separated (empty = all bugs of the suite)
+        default: ""
+      max_total_usd:
+        description: Stop before any model call if the worst-case spend is higher (USD)
+        default: "10"
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ADLC_ANTHROPIC_MODEL: ${{ vars.ADLC_ANTHROPIC_MODEL }}
+      ADLC_ANTHROPIC_PRICE_INPUT: ${{ vars.ADLC_ANTHROPIC_PRICE_INPUT }}
+      ADLC_ANTHROPIC_PRICE_OUTPUT: ${{ vars.ADLC_ANTHROPIC_PRICE_OUTPUT }}
+      ADLC_ANTHROPIC_PRICE_CACHE_READ: ${{ vars.ADLC_ANTHROPIC_PRICE_CACHE_READ }}
+      ADLC_ANTHROPIC_PRICE_CACHE_WRITE: ${{ vars.ADLC_ANTHROPIC_PRICE_CACHE_WRITE }}
+      ADLC_OPENAI_MODEL: ${{ vars.ADLC_OPENAI_MODEL }}
+      ADLC_OPENAI_PRICE_INPUT: ${{ vars.ADLC_OPENAI_PRICE_INPUT }}
+      ADLC_OPENAI_PRICE_OUTPUT: ${{ vars.ADLC_OPENAI_PRICE_OUTPUT }}
+      ADLC_OPENAI_PRICE_CACHE_READ: ${{ vars.ADLC_OPENAI_PRICE_CACHE_READ }}
+      ADLC_OPENAI_PRICE_CACHE_WRITE: ${{ vars.ADLC_OPENAI_PRICE_CACHE_WRITE }}
+      # Inputs go through the environment, never into the shell text.
+      INPUT_AGENTS: ${{ inputs.agents }}
+      INPUT_BUGS: ${{ inputs.bugs }}
+      INPUT_MAX_TOTAL_USD: ${{ inputs.max_total_usd }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build
+        run: make build
+      - name: spend guard
+        run: |
+          set -eu
+          args=(evals/suites/go-bugs --agents "$INPUT_AGENTS" --dry-run)
+          if [ -n "$INPUT_BUGS" ]; then args+=(--bugs "$INPUT_BUGS"); fi
+          line=$(./bin/adlc eval "${args[@]}")
+          echo "$line"
+          worst=${line##*worst_case_usd=}
+          python3 - "$worst" "$INPUT_MAX_TOTAL_USD" <<'PY'
+          import sys
+          from decimal import Decimal
+          worst, limit = Decimal(sys.argv[1]), Decimal(sys.argv[2])
+          if worst > limit:
+              sys.exit(f"worst-case spend {worst} USD is above max_total_usd {limit} USD; no model was called")
+          print(f"worst-case spend {worst} USD is within max_total_usd {limit} USD")
+          PY
+      - name: eval
+        run: |
+          set -eu
+          args=(evals/suites/go-bugs --agents "$INPUT_AGENTS" --db eval.db --out eval-report.json)
+          if [ -n "$INPUT_BUGS" ]; then args+=(--bugs "$INPUT_BUGS"); fi
+          ./bin/adlc eval "${args[@]}"
+      - name: upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: |
+            eval-report.json
+            eval.db
+          if-no-files-found: warn
+      - name: report
+        if: always()
+        run: |
+          if [ -f eval-report.json ]; then ./bin/adlc eval-report eval-report.json; else echo "no report was written"; fi

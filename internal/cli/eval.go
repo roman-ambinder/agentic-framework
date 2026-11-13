@@ -26,7 +26,7 @@ import (
 type evalOptions struct {
 	suiteDir, db, out, workDir, image string
 	agents, bugs                      []string
-	keepWorkspaces                    bool
+	keepWorkspaces, dryRun            bool
 }
 
 func newEvalCmd() *cobra.Command {
@@ -50,6 +50,7 @@ func newEvalCmd() *cobra.Command {
 	f.StringVar(&o.workDir, "workdir", "", "host directory for workspaces (default: a new temporary directory)")
 	f.StringVar(&o.image, "image", evals.DefaultImage, "sandbox image")
 	f.BoolVar(&o.keepWorkspaces, "keep-workspaces", false, "keep the workspace directory after the run")
+	f.BoolVar(&o.dryRun, "dry-run", false, "load the suite and agents, print the worst-case spend and exit (no Docker, no model calls)")
 	_ = cmd.MarkFlagRequired("agents")
 	return cmd
 }
@@ -77,6 +78,9 @@ func loadAgents(paths []string) ([]*agentconfig.Agent, error) {
 		if err != nil {
 			return nil, err
 		}
+		if a.Model.Provider == "fake" {
+			return nil, fmt.Errorf("eval: agent %s: provider fake is not supported by adlc eval", p)
+		}
 		agents = append(agents, a)
 	}
 	return agents, nil
@@ -87,6 +91,9 @@ func runEval(ctx context.Context, o evalOptions, stdout io.Writer) error {
 	suite, agents, bugs, err := loadEvalInputs(o)
 	if err != nil {
 		return &exitError{code: 1, err: err}
+	}
+	if o.dryRun {
+		return evalDryRun(stdout, bugs, agents)
 	}
 	if err := os.MkdirAll(filepath.Dir(o.db), 0o755); err != nil {
 		return &exitError{code: 1, err: fmt.Errorf("eval: create db directory: %w", err)}
@@ -129,6 +136,23 @@ func runEval(ctx context.Context, o evalOptions, stdout io.Writer) error {
 	if runErr != nil {
 		return &exitError{code: 1, err: runErr}
 	}
+	return nil
+}
+
+// evalDryRun prints "bugs=<n> agents=<m> worst_case_usd=<x>", where the worst
+// case is bugs x the sum of every agent's budget.max_usd. An agent without
+// max_usd has no spend limit, so the dry run fails.
+func evalDryRun(stdout io.Writer, bugs []evals.Bug, agents []*agentconfig.Agent) error {
+	var perBug int64
+	for _, a := range agents {
+		micros, _ := agentconfig.ParseMicroUSD(a.Budget.MaxUSD)
+		if micros == 0 {
+			return &exitError{code: 1, err: fmt.Errorf("eval: agent %s has no budget.max_usd, worst case is unbounded", a.AgentID())}
+		}
+		perBug += micros
+	}
+	total := perBug * int64(len(bugs))
+	fmt.Fprintf(stdout, "bugs=%d agents=%d worst_case_usd=%d.%06d\n", len(bugs), len(agents), total/1_000_000, total%1_000_000)
 	return nil
 }
 

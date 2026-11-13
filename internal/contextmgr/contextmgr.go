@@ -102,14 +102,23 @@ func build(ctx context.Context, req *model.Request, b Budget, elided map[string]
 // lowWaterRatio returns the effective LowWaterRatio, or an error when it is
 // outside (0, 1].
 func lowWaterRatio(b Budget) (float64, error) {
-	r := b.LowWaterRatio
-	if r == 0 {
+	if err := b.Validate(); err != nil {
+		return 0, err
+	}
+	if b.LowWaterRatio == 0 {
 		return defaultLowWaterRatio, nil
 	}
-	if !(r > 0 && r <= 1) {
-		return 0, fmt.Errorf("contextmgr: LowWaterRatio %v must be in (0, 1]", r)
+	return b.LowWaterRatio, nil
+}
+
+// Validate reports whether the budget is usable: LowWaterRatio must be 0
+// (default) or in (0, 1]. Build applies the same check.
+func (b Budget) Validate() error {
+	r := b.LowWaterRatio
+	if r != 0 && !(r > 0 && r <= 1) {
+		return fmt.Errorf("contextmgr: LowWaterRatio %v must be in (0, 1]", r)
 	}
-	return r, nil
+	return nil
 }
 
 func keepSteps(b Budget) int {

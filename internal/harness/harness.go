@@ -8,6 +8,7 @@ package harness
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	adlcv1 "github.com/roman-ambinder/agentic-framework/gen/go/adlc/v1"
@@ -111,6 +112,9 @@ func validate(cfg Config, deps Deps) error {
 		return errors.New("harness: deps: tools is nil")
 	case deps.Policy == nil:
 		return errors.New("harness: deps: policy is nil")
+	}
+	if err := cfg.Context.Validate(); err != nil {
+		return fmt.Errorf("harness: config: %w", err)
 	}
 	return validateHooks(cfg.Hooks)
 }
