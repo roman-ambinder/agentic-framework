@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -18,6 +19,7 @@ type Report struct {
 	StartedAt  time.Time `json:"started_at"`
 	FinishedAt time.Time `json:"finished_at"`
 	Results    []Result  `json:"results"`
+	Summary    Summary   `json:"summary"`
 }
 
 // WriteReport writes rep to path as JSON with 2-space indent and a trailing
@@ -57,30 +59,52 @@ func stopWord(r Result) string {
 	return s
 }
 
-// PrintTable prints one row per result and then one "provider: n/m solved"
-// line per provider, sorted by provider name.
-func PrintTable(w io.Writer, results []Result) {
+// PrintTable prints one row per result, a blank line and one summary line per
+// provider (sorted by name), and a note when some results had errors.
+func PrintTable(w io.Writer, rep Report) {
 	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "BUG\tPROVIDER\tRESULT\tSTOP\tSECONDS")
-	solved := map[string]int{}
-	total := map[string]int{}
-	for _, r := range results {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\n", r.BugID, r.Provider, resultWord(r), stopWord(r), seconds(r.DurationMS))
-		total[r.Provider]++
-		if resultWord(r) == "solved" {
-			solved[r.Provider]++
+	fmt.Fprintln(tw, "BUG\tPROVIDER\tRESULT\tSTOP\tSTEPS\tTOOLS\tWASTED\tCOST\tSECONDS")
+	for _, r := range rep.Results {
+		steps, tools, wasted, cost := "-", "-", "-", "-"
+		if g := r.Grade; r.Error == "" && g != nil {
+			steps, tools, wasted, cost = strconv.Itoa(g.Steps), strconv.Itoa(g.ToolCalls), strconv.Itoa(g.WastedCalls), usd(g.USDMicros)
 		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n",
+			r.BugID, r.Provider, resultWord(r), stopWord(r), steps, tools, wasted, cost, seconds(r.DurationMS))
 	}
 	_ = tw.Flush()
-	providers := make([]string, 0, len(total))
-	for p := range total {
+	printSummary(w, rep.Summary)
+}
+
+// printSummary prints the per-provider lines and the errors note.
+func printSummary(w io.Writer, s Summary) {
+	providers := make([]string, 0, len(s.ByProvider))
+	width, anyErrors := 0, false
+	for p, ps := range s.ByProvider {
 		providers = append(providers, p)
+		width = max(width, len(p))
+		anyErrors = anyErrors || ps.Errors > 0
 	}
 	sort.Strings(providers)
+	if len(providers) > 0 {
+		fmt.Fprintln(w)
+	}
 	for _, p := range providers {
-		fmt.Fprintf(w, "%s: %d/%d solved\n", p, solved[p], total[p])
+		ps := s.ByProvider[p]
+		fmt.Fprintf(w, "%-*s  solved %d/%d (pass@1 %.3f)  easy %s  medium %s  hard %s  median %s  median steps %s  total %s  errors %d\n",
+			width, p, ps.Solved, ps.Runs, ps.PassAt1,
+			frac(ps.ByDifficulty[Easy]), frac(ps.ByDifficulty[Medium]), frac(ps.ByDifficulty[Hard]),
+			usd(ps.MedianUSDMicrosSolved), strconv.FormatFloat(ps.MedianStepsSolved, 'f', -1, 64),
+			usd(ps.TotalUSDMicros), ps.Errors)
+	}
+	if anyErrors {
+		fmt.Fprintln(w, "note: results with errors are excluded from pass@1")
 	}
 }
+
+func frac(b Bucket) string { return fmt.Sprintf("%d/%d", b.Solved, b.Runs) }
+
+func usd(micros int64) string { return fmt.Sprintf("$%.2f", float64(micros)/1e6) }
 
 // seconds rounds milliseconds to whole seconds.
 func seconds(ms int64) int64 { return (ms + 500) / 1000 }

@@ -116,6 +116,7 @@ func runEval(ctx context.Context, o evalOptions, stdout io.Writer) error {
 	started := time.Now()
 	results, runErr := r.RunAll(ctx, bugs, agents)
 	rep := evals.Report{Suite: suite.Name, StartedAt: started, FinishedAt: time.Now(), Results: results}
+	rep.Summary = evals.Summarize(rep.Results)
 	out := o.out
 	if out == "" {
 		out = filepath.Join("evals", "results", fmt.Sprintf("%s-%s.json", suite.Name, started.UTC().Format("20060102-150405")))
@@ -123,7 +124,7 @@ func runEval(ctx context.Context, o evalOptions, stdout io.Writer) error {
 	if err := evals.WriteReport(out, rep); err != nil {
 		return &exitError{code: 1, err: err}
 	}
-	evals.PrintTable(stdout, results)
+	evals.PrintTable(stdout, rep)
 	fmt.Fprintf(stdout, "report: %s\n", out)
 	if runErr != nil {
 		return &exitError{code: 1, err: runErr}
