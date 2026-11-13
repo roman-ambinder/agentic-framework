@@ -46,32 +46,46 @@ func (a *Agent) Validate() error {
 }
 
 func (a *Agent) validateModel(p *problems) {
-	m := a.Model
+	validateModelFields(p, "model", a.Model)
+	for i, f := range a.Model.Fallbacks {
+		path := fmt.Sprintf("model.fallbacks[%d]", i)
+		validateModelFields(p, path, f)
+		if len(f.Fallbacks) > 0 {
+			p.add(path+".fallbacks", "not allowed")
+		}
+		if f.Provider == a.Model.Provider && f.Name == a.Model.Name {
+			p.add(path, "repeats the primary provider and name")
+		}
+	}
+}
+
+// validateModelFields checks one model; path is "model" or "model.fallbacks[i]".
+func validateModelFields(p *problems, path string, m Model) {
 	switch m.Provider {
 	case "fake", "anthropic", "openai":
 	default:
-		p.add("model.provider", "must be one of fake, anthropic, openai, got %q", m.Provider)
+		p.add(path+".provider", "must be one of fake, anthropic, openai, got %q", m.Provider)
 	}
 	if m.Name == "" {
-		p.add("model.name", "is required")
+		p.add(path+".name", "is required")
 	}
 	if m.MaxTokens < 1 || m.MaxTokens > 1000000 {
-		p.add("model.max_tokens", "must be between 1 and 1000000")
+		p.add(path+".max_tokens", "must be between 1 and 1000000")
 	}
 	switch m.Effort {
 	case "", "low", "medium", "high", "xhigh", "max":
 	default:
-		p.add("model.effort", "must be one of low, medium, high, xhigh, max, got %q", m.Effort)
+		p.add(path+".effort", "must be one of low, medium, high, xhigh, max, got %q", m.Effort)
 	}
-	fields := []struct{ path, val string }{
-		{"model.pricing.input_per_mtok", m.Pricing.InputPerMTok},
-		{"model.pricing.output_per_mtok", m.Pricing.OutputPerMTok},
-		{"model.pricing.cache_read_per_mtok", m.Pricing.CacheReadPerMTok},
-		{"model.pricing.cache_write_per_mtok", m.Pricing.CacheWritePerMTok},
+	fields := []struct{ name, val string }{
+		{"input_per_mtok", m.Pricing.InputPerMTok},
+		{"output_per_mtok", m.Pricing.OutputPerMTok},
+		{"cache_read_per_mtok", m.Pricing.CacheReadPerMTok},
+		{"cache_write_per_mtok", m.Pricing.CacheWritePerMTok},
 	}
 	for _, f := range fields {
 		if _, err := ParseMicroUSD(f.val); err != nil {
-			p.add(f.path, moneyMsg, f.val)
+			p.add(path+".pricing."+f.name, moneyMsg, f.val)
 		}
 	}
 }

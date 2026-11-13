@@ -2,6 +2,7 @@ package agentconfig
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -247,5 +248,79 @@ func TestContextBudget(t *testing.T) {
 	}
 	if b := m.ContextBudget(); b.MaxInputTokens != 0 || b.KeepRecentSteps != 0 {
 		t.Errorf("default ContextBudget = %+v", b)
+	}
+}
+
+// fallbackYAML is a valid agent with one fallback; the names come from the environment.
+const fallbackYAML = `name: a
+version: 1
+model:
+  provider: anthropic
+  name: ${ADLC_TEST_MODEL}
+  pricing: {input_per_mtok: "3", output_per_mtok: "15"}
+  fallbacks:
+    - provider: openai
+      name: ${ADLC_TEST_FALLBACK}
+      pricing: {input_per_mtok: "1", output_per_mtok: "2"}
+policy: {default: deny}
+`
+
+func TestFallbacksConfig(t *testing.T) {
+	t.Setenv("ADLC_TEST_MODEL", "primary-1")
+	t.Setenv("ADLC_TEST_FALLBACK", "fallback-1")
+	t.Run("valid fallback loads", func(t *testing.T) {
+		a, err := Parse([]byte(fallbackYAML))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(a.Model.Fallbacks) != 1 {
+			t.Fatalf("fallbacks = %+v, want one", a.Model.Fallbacks)
+		}
+		f := a.Model.Fallbacks[0]
+		if f.Provider != "openai" || f.Name != "fallback-1" || f.MaxTokens != DefaultMaxTokens {
+			t.Errorf("fallback = %+v", f)
+		}
+	})
+	tests := []struct{ name, yaml, want string }{
+		{"empty name", strings.Replace(fallbackYAML, "name: ${ADLC_TEST_FALLBACK}", "name: \"\"", 1), `model.fallbacks[0].name: is required`},
+		{"missing name", strings.Replace(fallbackYAML, "      name: ${ADLC_TEST_FALLBACK}\n", "", 1), `model.fallbacks[0].name: is required`},
+		{"env missing", strings.Replace(fallbackYAML, "ADLC_TEST_FALLBACK}", "ADLC_TEST_NOPE}", 1), `model.fallbacks[0].name: environment variable ADLC_TEST_NOPE is not set`},
+		{"same as primary", strings.Replace(strings.Replace(fallbackYAML, "provider: openai", "provider: anthropic", 1), "${ADLC_TEST_FALLBACK}", "${ADLC_TEST_MODEL}", 1), `model.fallbacks[0]: repeats the primary provider and name`},
+		{"unknown provider", strings.Replace(fallbackYAML, "provider: openai", "provider: nope", 1), `model.fallbacks[0].provider: must be one of fake, anthropic, openai, got "nope"`},
+		{"nested fallbacks", strings.Replace(fallbackYAML, "      pricing:", "      fallbacks: [{provider: openai, name: x}]\n      pricing:", 1), `model.fallbacks[0].fallbacks: not allowed`},
+		{"bad pricing", strings.Replace(fallbackYAML, `output_per_mtok: "2"`, `output_per_mtok: x`, 1), `model.fallbacks[0].pricing.output_per_mtok: "x" is not a decimal amount`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.yaml))
+			wantErr(t, err, tt.want)
+		})
+	}
+}
+
+func TestFallbackPrices(t *testing.T) {
+	t.Setenv("ADLC_TEST_MODEL", "primary-1")
+	t.Setenv("ADLC_TEST_FALLBACK", "fallback-1")
+	a, err := Parse([]byte(fallbackYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]model.Price{
+		"primary-1":  {InputPerMTok: 3_000_000, OutputPerMTok: 15_000_000},
+		"fallback-1": {InputPerMTok: 1_000_000, OutputPerMTok: 2_000_000},
+	}
+	if got := a.Prices(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Prices() = %+v, want %+v", got, want)
+	}
+}
+
+func TestFallbackPricesPrimaryWinsOnSharedName(t *testing.T) {
+	a, err := Parse([]byte("name: a\nversion: 1\nmodel:\n  provider: anthropic\n  name: shared\n  pricing: {input_per_mtok: \"3\"}\n" +
+		"  fallbacks:\n    - {provider: openai, name: shared, pricing: {input_per_mtok: \"1\"}}\npolicy: {default: deny}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Prices()["shared"].InputPerMTok; got != 3_000_000 {
+		t.Errorf("Prices[shared].InputPerMTok = %d, want the primary's 3000000", got)
 	}
 }

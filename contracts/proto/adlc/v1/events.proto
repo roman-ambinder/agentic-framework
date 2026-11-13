@@ -160,6 +160,10 @@ message ModelCallCompleted {
   // call (e.g. thinking blocks). The harness stores but never interprets it.
   repeated ProviderBlob provider_blobs = 6;
   google.protobuf.Duration latency = 7;
+  // Provider and model that actually answered (differs from
+  // model_call_started when a router fell back).
+  string provider = 8;
+  string model = 9;
 }
 
 // FinishReason is the provider-neutral reason a model call ended.

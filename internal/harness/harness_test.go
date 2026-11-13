@@ -15,6 +15,7 @@ import (
 	adlcv1 "github.com/roman-ambinder/agentic-framework/gen/go/adlc/v1"
 	"github.com/roman-ambinder/agentic-framework/internal/eventlog"
 	"github.com/roman-ambinder/agentic-framework/internal/model"
+	"github.com/roman-ambinder/agentic-framework/internal/model/router"
 	"github.com/roman-ambinder/agentic-framework/internal/policy"
 	"github.com/roman-ambinder/agentic-framework/internal/toolrouter"
 )
@@ -891,4 +892,37 @@ type cancelingFailModel struct {
 func (m cancelingFailModel) Generate(context.Context, *model.Request) (*model.Response, error) {
 	m.cancel()
 	return nil, rateLimited().Err
+}
+
+func TestHarnessRecordsServedModel(t *testing.T) {
+	primary := model.NewFake(rateLimited())
+	fallbackTurn := textTurn("ok")
+	fallbackTurn.Response.Usage = model.Usage{InputTokens: 10}
+	fallback := model.NewFake(fallbackTurn)
+	rt, err := router.New(router.Candidate{Adapter: primary, Model: "m1"}, router.Candidate{Adapter: fallback, Model: "m2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := baseConfig()
+	cfg.Model = "m1" // the router primary
+	cfg.Price = model.Price{InputPerMTok: 1}
+	cfg.Prices = map[string]model.Price{"m2": {InputPerMTok: 1_000_000}}
+	store := newLog(t)
+	state, err := Run(context.Background(), cfg, Deps{Log: store, Model: rt, Tools: staticTools(t), Policy: policy.AllowAll{}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	events := assertFolds(t, store, cfg.RunID, state)
+	wantKinds(t, events, "run_started", "model_call_started", "model_call_completed", "run_completed")
+	started := events[1].GetModelCallStarted()
+	if started.GetProvider() != "router" || started.GetModel() != "m1" {
+		t.Errorf("model_call_started provider/model = %q/%q, want router/m1", started.GetProvider(), started.GetModel())
+	}
+	done := events[2].GetModelCallCompleted()
+	if done.GetProvider() != "fake" || done.GetModel() != "m2" {
+		t.Errorf("model_call_completed provider/model = %q/%q, want fake/m2", done.GetProvider(), done.GetModel())
+	}
+	if got := events[2].GetCost().GetUsdMicros(); got != 10 {
+		t.Errorf("cost = %d micro-USD, want 10 (priced with Prices[m2])", got)
+	}
 }
