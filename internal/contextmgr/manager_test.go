@@ -167,3 +167,43 @@ func TestManagerElidesRarely(t *testing.T) {
 		t.Errorf("steps with new elisions = %d, want 1 to 5", elidingSteps)
 	}
 }
+
+// setCallID gives step (0-based, as in sized) the tool call ID id, on both
+// its call and its result.
+func setCallID(req *model.Request, step int, id string) {
+	req.Messages[1+2*step].Parts[0].ToolCall.ID = id
+	req.Messages[2+2*step].Parts[0].ToolResult.CallID = id
+}
+
+// TestManagerKeysElisionsByPosition: providers do not guarantee unique call
+// IDs across a run. Steps 0 and 1 share the ID "dup". Only the older result
+// (step 0) is elided; the newer one must stay intact on the next Prepare.
+func TestManagerKeysElisionsByPosition(t *testing.T) {
+	req1 := sized(sixSteps()...)
+	req2 := sized(append(sixSteps(), 10)...)
+	for _, r := range []*model.Request{req1, req2} {
+		setCallID(r, 0, "dup")
+		setCallID(r, 1, "dup")
+	}
+	m := NewManager(Budget{LowWaterRatio: 1, MaxInputTokens: EstimateRequest(req1) - 1})
+	out1, st1, err := m.Prepare(context.Background(), req1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st1.ElidedResults != 1 || resultContent(out1, 0) != placeholder {
+		t.Fatalf("step 1: stats %+v, step 0 = %.40q; want only step 0 elided", st1, resultContent(out1, 0))
+	}
+	out2, st2, err := m.Prepare(context.Background(), req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st2.ElidedResults != 0 {
+		t.Errorf("step 2: ElidedResults = %d, want 0", st2.ElidedResults)
+	}
+	if resultContent(out2, 0) != placeholder {
+		t.Errorf("step 2: step 0 = %.40q, want it still elided", resultContent(out2, 0))
+	}
+	if got := resultContent(out2, 1); got != strings.Repeat("x", 4000) {
+		t.Errorf("step 2: step 1 = %.40q, want it intact (same CallID as the elided step 0)", got)
+	}
+}
