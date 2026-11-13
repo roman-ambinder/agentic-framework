@@ -8,7 +8,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
-	"github.com/roman-ambinder/agentic-framework/internal/eventlog"
 	"github.com/roman-ambinder/agentic-framework/internal/observability"
 )
 
@@ -40,7 +39,7 @@ func traceRun(cmd *cobra.Command, db, runID string, otelStdout bool) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	store, err := eventlog.Open(ctx, db)
+	store, err := openExistingLog(ctx, db)
 	if err != nil {
 		return err
 	}

@@ -111,3 +111,12 @@ func TestTraceCommandNeedsOneArg(t *testing.T) {
 		t.Errorf("exit code = %d, want 1", code)
 	}
 }
+
+// A typo in --db must be an error, not an empty log created on the fly.
+func TestTraceMissingDB(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "typo.db")
+	code, _, errOut := run(t, "trace", "run-1", "--db", db)
+	if code != 1 || !strings.Contains(errOut, "does not exist") {
+		t.Errorf("exit %d, stderr %q; want 1 and \"does not exist\"", code, errOut)
+	}
+}
