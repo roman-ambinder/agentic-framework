@@ -77,7 +77,7 @@ func TestRunExecutesToolCallAndContinues(t *testing.T) {
 		toolTurn(readCall("t1", "a.go")), textTurn("ok"))
 	wantKinds(t, r.events, "run_started",
 		"model_call_started", "model_call_completed",
-		"tool_call_requested", "policy_decided", "tool_call_completed",
+		"tool_call_requested", "policy_decided", "tool_call_completed", "checkpoint",
 		"model_call_started", "model_call_completed", "run_completed")
 	wantStop(t, r.state, stopCompleted, "")
 	if r.state.ToolCalls != 1 || r.state.Step != 2 {

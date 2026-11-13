@@ -291,8 +291,7 @@ func (l *loop) afterResponse(resp *model.Response, calls []model.ToolCall) error
 			return err
 		}
 	}
-	// 0.5.4 adds the checkpoint here.
-	return nil
+	return l.writeCheckpoint(l.r.state.Step)
 }
 
 // runToolCall runs one tool call. It sets l.final when the run stops.
@@ -317,7 +316,9 @@ func (l *loop) runToolCall(call model.ToolCall) error {
 		}}})
 		return err
 	}
-	// 0.5.4 runs PreTool hooks here.
+	if stopped, err := l.runPreHooks(call, tool, reqSeq); stopped || err != nil {
+		return err
+	}
 	if stopped, err := l.authorize(call, tool, reqSeq); stopped || err != nil {
 		return err
 	}
@@ -330,8 +331,10 @@ func (l *loop) runToolCall(call model.ToolCall) error {
 		CallId: call.ID, IsError: res.IsError, Output: res.Output, TruncatedForModel: truncated,
 		Duration: durationpb.New(res.Duration), ExitCode: res.ExitCode,
 	}}})
-	// 0.5.4 runs PostTool hooks here.
-	return err
+	if err != nil {
+		return err
+	}
+	return l.runPostHooks(call, res)
 }
 
 func (l *loop) unknownToolMessage(name string) string {
