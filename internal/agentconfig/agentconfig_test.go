@@ -420,3 +420,34 @@ func TestHookPlugins(t *testing.T) {
 		t.Errorf("hook b = %+v", got[1])
 	}
 }
+
+func TestPlanningConfig(t *testing.T) {
+	const head = "name: a\nversion: 1\nmodel: {provider: fake}\npolicy: {default: deny}\n"
+	tests := []struct {
+		name string
+		yaml string
+		want Planning
+		err  string
+	}{
+		{name: "absent", yaml: head, want: Planning{}},
+		{name: "set", yaml: head + "planning: {enabled: true, prompt: \"p\", max_tokens: 10}\n", want: Planning{Enabled: true, Prompt: "p", MaxTokens: 10}},
+		{name: "negative", yaml: head + "planning: {max_tokens: -1}\n", err: "planning.max_tokens: must be between 0 and 1000000, got -1"},
+		{name: "too big", yaml: head + "planning: {max_tokens: 1000001}\n", err: "planning.max_tokens: must be between 0 and 1000000, got 1000001"},
+		{name: "unknown key", yaml: head + "planning: {enabld: true}\n", err: `unknown field "enabld"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, err := Parse([]byte(tt.yaml))
+			if tt.err != "" {
+				wantErr(t, err, tt.err)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if a.Planning != tt.want {
+				t.Fatalf("Planning = %+v, want %+v", a.Planning, tt.want)
+			}
+		})
+	}
+}

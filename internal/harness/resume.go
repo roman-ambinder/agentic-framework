@@ -141,6 +141,11 @@ func (l *loop) resume() (*eventlog.RunState, error) {
 	if err := l.closeInFlight(plan); err != nil {
 		return nil, err
 	}
+	if l.cfg.Plan.Enabled && l.r.modelCalls == 0 && !hasPlan(l.r.events) {
+		if err := l.runPlanCall(); err != nil || l.final != nil {
+			return l.final, err
+		}
+	}
 	return l.steps(nextStep)
 }
 
@@ -185,11 +190,16 @@ func (l *loop) planRecovery() recoveryPlan {
 	return recoveryPlan{abandoned: l.abandonedCalls(), notRun: notRequested(mc, tail)} // cases A, B; else C, D
 }
 
-// lastModelCompleted returns the last model_call_completed and the events
-// after it, or nil and the whole log if there is none.
+// lastModelCompleted returns the last model_call_completed of a step and the
+// events after it, or nil and the whole log if there is none. The planning
+// call (task Q.4) is not a step response: it is skipped, so Resume and
+// Approve never treat the plan as the run's answer.
 func lastModelCompleted(events []*adlcv1.Event) (*adlcv1.ModelCallCompleted, []*adlcv1.Event) {
 	for i := len(events) - 1; i >= 0; i-- {
 		if mc := events[i].GetModelCallCompleted(); mc != nil {
+			if mc.GetCallId() == PlanCallID {
+				continue
+			}
 			return mc, events[i+1:]
 		}
 	}

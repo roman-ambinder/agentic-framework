@@ -86,6 +86,11 @@ func (l *loop) run() (*eventlog.RunState, error) {
 		return nil, err
 	}
 	l.loadTools()
+	if l.cfg.Plan.Enabled {
+		if err := l.runPlanCall(); err != nil || l.final != nil {
+			return l.final, err
+		}
+	}
 	return l.steps(1)
 }
 

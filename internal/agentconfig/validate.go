@@ -44,6 +44,7 @@ func (a *Agent) Validate() error {
 	a.validateSandbox(&p)
 	a.validateBudget(&p)
 	a.validateContext(&p)
+	a.validatePlanning(&p)
 	a.validatePolicy(&p)
 	a.validateHooks(&p)
 	return errors.Join(p...)
@@ -162,6 +163,12 @@ func (a *Agent) validateContext(p *problems) {
 	}
 	if a.Context.KeepRecentSteps < 0 {
 		p.add("context.keep_recent_steps", "must be >= 0, got %d", a.Context.KeepRecentSteps)
+	}
+}
+
+func (a *Agent) validatePlanning(p *problems) {
+	if v := a.Planning.MaxTokens; v < 0 || v > 1000000 {
+		p.add("planning.max_tokens", "must be between 0 and 1000000, got %d", v)
 	}
 }
 

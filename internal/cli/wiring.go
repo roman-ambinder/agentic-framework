@@ -218,5 +218,6 @@ func harnessConfig(a *agentconfig.Agent, runID, task string) harness.Config {
 		Prices:             a.Prices(),
 		MaxToolOutputBytes: a.MaxToolOutputBytes,
 		Context:            a.ContextBudget(),
+		Plan:               harness.PlanConfig{Enabled: a.Planning.Enabled, Prompt: a.Planning.Prompt, MaxTokens: a.Planning.MaxTokens},
 	}
 }
