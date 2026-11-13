@@ -37,6 +37,7 @@ Generated protobuf package: `adlcv1 "<mod>/gen/go/adlc/v1"`.
 | `internal/costreport` | 1.11 | cost report from cost events (`adlc cost`) |
 | `evals/fixtures/ledger` | E.1 | the fixture Go project (own module `example.com/ledger`) |
 | `evals/suites/go-bugs/<bug-id>/` | E.2, format E.3 | seeded bugs (§9); `evals/suites/go.mod` keeps them out of the main module |
+| `internal/controlplane` | C.3, C.4 | control database `.adlc/control.db`: kill switches, agent registry |
 | `internal/cli` | 0.9.2 and others | cobra commands |
 
 ## §2 Model types — `internal/model`
@@ -854,6 +855,78 @@ JSON report (with run ids), not as events.
 | 1.3 | `ModelCallCompleted` | `string model` | 9 |
 | 1.7 | `Event` payload oneof | `RunResumed run_resumed` | 22 |
 | 0.11.1 | new file `plugin.proto` | `HookService`, `ToolCallInfo`, `PreToolRequest/Response`, `PostToolRequest/Response` | — |
+| Q.3 | `RunStarted` | `string forked_from_run_id` | 7 |
+| Q.3 | `RunStarted` | `uint32 forked_at_step` | 8 |
 
 Every addition is additive; `make proto-breaking` must pass. Before taking a
 number, check this table and the `.proto` file; add your row here in the same PR.
+
+## §11 M2 additions (briefs C.1–C.4, Q.1–Q.5)
+
+Shared decisions: `docs/impl/m2.md`. Each brief has the exact text of its
+additions; this section lists them so tasks do not collide. Implement a task's
+part only when you implement that task.
+
+### Harness (`internal/harness`)
+
+- **C.1 approvals:** `Resolution{ApprovalID, Approved, By, Comment}`;
+  `CheckApproval`, `ResolveApproval`, `Approve`, `RejectedOutput`; errors
+  `ErrRunNotPaused`, `ErrUnknownApproval`, `ErrApprovalResolved`,
+  `ErrContinueRun`. No schema change (`approval_resolved` has every field).
+- **C.3 kill switch:** `Deps.KillSwitch KillSwitch` (nil = off) with
+  `KillSwitch interface { Killed(ctx, runID, agentID string) (bool, string, error) }`;
+  checked before every model call and tool call; a killed run ends
+  `CANCELLED` with detail `killed: <reason>`; a failing check writes
+  `error_occurred` and the run continues.
+- **Q.3 fork:** `ForkPoint{RunID, AtStep}`, `Fork`, `ForkEvents`; errors
+  `ErrNoCheckpoint`, `ErrRunExists`; uses the §10 fields 7 and 8.
+- **Q.4 plan step:** `Config.Plan PlanConfig{Enabled, Prompt, MaxTokens}`;
+  constants `PlanCallID = "plan"`, `DefaultPlanMaxTokens`, `DefaultPlanPrompt`,
+  `PlanFollowUp`; the plan call is step 0, counts towards tokens and cost but
+  not `max_steps`.
+- **Q.5 step roles:** `Deps.PlanModel model.Adapter` (nil = `Deps.Model`);
+  `PlanConfig.Model`, `PlanConfig.Effort`.
+
+### Policy (`internal/policy`) — C.2
+
+`Rule.Tool` becomes a glob (a plain name still matches exactly), new
+`Rule.Args map[string]ArgMatcher`; `ArgMatcher{Glob, Prefix, Regex, In}`
+(exactly one set; matches top-level JSON string arguments only);
+`ArgMatcher.Check`, `CheckGlob` (errors without the `policy:` prefix, so
+agentconfig can prefix the field path).
+
+### Agent config (`internal/agentconfig`)
+
+- **C.2:** `policy.include` (policy files; no `default` in them), `args` and
+  tool globs in rules; included rules are evaluated first.
+- **C.4:** `AgentFileName = "agent.yaml"`, `SourceFile{Path, Data}`,
+  `DigestFiles`, `(*Agent).Digest`, `LoadAt(path, workDir)`.
+- **Q.4:** optional `planning:` section; **Q.5:** `model.roles.plan`.
+
+### Control plane (`internal/controlplane`) — C.3, C.4
+
+`Open(ctx, path, opts...)`, `Close`, `WithClock`; kills: `Scope`
+(`run`/`agent`/`all`), `Kill`, `Unkill`, `Active`, `Killed`; agent kills
+match `Config.AgentID` exactly (`hello@1`) or by name (`hello`); registry:
+`Ref`, `ParseRef`, `Env`, `ParseEnv`, `AgentVersion`, `Register`, `Version`,
+`Versions`, `Resolve`, `Gate`, `Promotion`, `Promote`.
+
+### Evals (`internal/evals`)
+
+- **C.4:** `Result.AgentDigest` (`agent_digest`).
+- **Q.1:** `Runner.Repeat`, `Result.Attempt`, `Report.Repeat`, `PassAtK`,
+  `Summary.ByAgent`, `Compare`, `PrintComparison` and the comparison types.
+- **Q.2:** `FailureCause` and its constants, `Classify`, `AnalyzeFailures`,
+  `PrintFailures`.
+
+### Tasks that edit the same code
+
+| Code | Tasks |
+|------|-------|
+| `internal/harness/loop.go`, `resume.go` | C.1, C.3, Q.3, Q.4, Q.5 |
+| `harness.Deps` | C.3 (`KillSwitch`), Q.5 (`PlanModel`) |
+| `evals.Result` | C.4 (`AgentDigest`), Q.1 (`Attempt`) |
+| `internal/agentconfig` | C.2, C.4, Q.4, Q.5 |
+
+All changes are additive, but run these tasks one after another (or merge
+carefully) rather than in parallel on the same files.
