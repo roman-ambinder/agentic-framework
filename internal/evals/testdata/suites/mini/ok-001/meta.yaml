@@ -1,0 +1,10 @@
+id: ok-001
+difficulty: easy
+title: Add subtracts
+fixture: tiny
+test_package: calc
+hidden_tests:
+  - TestHiddenAddSmall
+timeout: 1m
+fix_files:
+  - calc/calc.go
