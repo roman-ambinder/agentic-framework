@@ -87,6 +87,15 @@ func TestRunOneSolved(t *testing.T) {
 	}
 }
 
+func TestRunOneRecordsAgentDigest(t *testing.T) {
+	env := newRunnerEnv(t, fixing)
+	a := testAgent(t, "coder", "anthropic")
+	res := env.r.RunOne(context.Background(), env.bug, a)
+	if res.AgentDigest != a.Digest() || !strings.HasPrefix(res.AgentDigest, "sha256:") {
+		t.Errorf("AgentDigest = %q, want %q", res.AgentDigest, a.Digest())
+	}
+}
+
 func TestRunOneGradesSolved(t *testing.T) {
 	env := newRunnerEnv(t, fixing)
 	res := env.r.RunOne(context.Background(), env.bug, testAgent(t, "coder", "anthropic"))

@@ -34,6 +34,7 @@ func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	root.AddCommand(newKillCmd())
 	root.AddCommand(newUnkillCmd())
 	root.AddCommand(newKillsCmd())
+	root.AddCommand(newAgentCmd())
 	return root
 }
 

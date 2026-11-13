@@ -55,8 +55,9 @@ type Runner struct {
 type Result struct {
 	BugID        string             `json:"bug_id"`
 	Difficulty   Difficulty         `json:"difficulty"`
-	Agent        string             `json:"agent"`    // agent id, e.g. "coder-anthropic@1"
-	Provider     string             `json:"provider"` // from the agent file
+	Agent        string             `json:"agent"`                  // agent id, e.g. "coder-anthropic@1"
+	Provider     string             `json:"provider"`               // from the agent file
+	AgentDigest  string             `json:"agent_digest,omitempty"` // agentconfig.(*Agent).Digest() of the agent file (task C.4)
 	RunID        string             `json:"run_id"`
 	Attempt      int                `json:"attempt"`     // 1-based; 0 in reports written before task Q.1 (read as 1)
 	StopReason   string             `json:"stop_reason"` // adlcv1.StopReason name; "" if the run never started
@@ -129,7 +130,7 @@ func (r *Runner) runAttempt(ctx context.Context, bug Bug, agent *agentconfig.Age
 	}
 	res = Result{
 		BugID: bug.ID, Difficulty: bug.Difficulty, Agent: agent.AgentID(),
-		Provider: agent.Model.Provider, RunID: id, Attempt: attempt,
+		Provider: agent.Model.Provider, AgentDigest: agent.Digest(), RunID: id, Attempt: attempt,
 	}
 	defer func() {
 		res.DurationMS = r.now().Sub(start).Milliseconds()
