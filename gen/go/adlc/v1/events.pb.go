@@ -481,6 +481,7 @@ type Event struct {
 	//	*Event_ApprovalResolved
 	//	*Event_Checkpoint
 	//	*Event_ErrorOccurred
+	//	*Event_RunResumed
 	Payload       isEvent_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -680,6 +681,15 @@ func (x *Event) GetErrorOccurred() *ErrorOccurred {
 	return nil
 }
 
+func (x *Event) GetRunResumed() *RunResumed {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_RunResumed); ok {
+			return x.RunResumed
+		}
+	}
+	return nil
+}
+
 type isEvent_Payload interface {
 	isEvent_Payload()
 }
@@ -732,6 +742,10 @@ type Event_ErrorOccurred struct {
 	ErrorOccurred *ErrorOccurred `protobuf:"bytes,21,opt,name=error_occurred,json=errorOccurred,proto3,oneof"`
 }
 
+type Event_RunResumed struct {
+	RunResumed *RunResumed `protobuf:"bytes,22,opt,name=run_resumed,json=runResumed,proto3,oneof"`
+}
+
 func (*Event_RunStarted) isEvent_Payload() {}
 
 func (*Event_RunCompleted) isEvent_Payload() {}
@@ -755,6 +769,8 @@ func (*Event_ApprovalResolved) isEvent_Payload() {}
 func (*Event_Checkpoint) isEvent_Payload() {}
 
 func (*Event_ErrorOccurred) isEvent_Payload() {}
+
+func (*Event_RunResumed) isEvent_Payload() {}
 
 // Cost of an event. Money is in micro-US-dollars to avoid floating point.
 type Cost struct {
@@ -1051,6 +1067,80 @@ func (x *RunStarted) GetResumedFromRunId() string {
 	return ""
 }
 
+// RunResumed is written when a run that stopped without run_completed is
+// continued by `adlc resume`.
+type RunResumed struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Step the resumed run continues with.
+	NextStep uint32 `protobuf:"varint,1,opt,name=next_step,json=nextStep,proto3" json:"next_step,omitempty"`
+	// seq of the last checkpoint that was verified, 0 if the run had none.
+	VerifiedCheckpointSeq uint64 `protobuf:"varint,2,opt,name=verified_checkpoint_seq,json=verifiedCheckpointSeq,proto3" json:"verified_checkpoint_seq,omitempty"`
+	// Tool calls closed as abandoned because the process died during them.
+	AbandonedToolCalls uint32 `protobuf:"varint,3,opt,name=abandoned_tool_calls,json=abandonedToolCalls,proto3" json:"abandoned_tool_calls,omitempty"`
+	// Why the run is resumed, for people reading the log.
+	Reason        string `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RunResumed) Reset() {
+	*x = RunResumed{}
+	mi := &file_adlc_v1_events_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RunResumed) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunResumed) ProtoMessage() {}
+
+func (x *RunResumed) ProtoReflect() protoreflect.Message {
+	mi := &file_adlc_v1_events_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunResumed.ProtoReflect.Descriptor instead.
+func (*RunResumed) Descriptor() ([]byte, []int) {
+	return file_adlc_v1_events_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *RunResumed) GetNextStep() uint32 {
+	if x != nil {
+		return x.NextStep
+	}
+	return 0
+}
+
+func (x *RunResumed) GetVerifiedCheckpointSeq() uint64 {
+	if x != nil {
+		return x.VerifiedCheckpointSeq
+	}
+	return 0
+}
+
+func (x *RunResumed) GetAbandonedToolCalls() uint32 {
+	if x != nil {
+		return x.AbandonedToolCalls
+	}
+	return 0
+}
+
+func (x *RunResumed) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 type RunCompleted struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	StopReason StopReason             `protobuf:"varint,1,opt,name=stop_reason,json=stopReason,proto3,enum=adlc.v1.StopReason" json:"stop_reason,omitempty"`
@@ -1066,7 +1156,7 @@ type RunCompleted struct {
 
 func (x *RunCompleted) Reset() {
 	*x = RunCompleted{}
-	mi := &file_adlc_v1_events_proto_msgTypes[5]
+	mi := &file_adlc_v1_events_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1078,7 +1168,7 @@ func (x *RunCompleted) String() string {
 func (*RunCompleted) ProtoMessage() {}
 
 func (x *RunCompleted) ProtoReflect() protoreflect.Message {
-	mi := &file_adlc_v1_events_proto_msgTypes[5]
+	mi := &file_adlc_v1_events_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1091,7 +1181,7 @@ func (x *RunCompleted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunCompleted.ProtoReflect.Descriptor instead.
 func (*RunCompleted) Descriptor() ([]byte, []int) {
-	return file_adlc_v1_events_proto_rawDescGZIP(), []int{5}
+	return file_adlc_v1_events_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RunCompleted) GetStopReason() StopReason {
@@ -1138,7 +1228,7 @@ type ModelCallStarted struct {
 
 func (x *ModelCallStarted) Reset() {
 	*x = ModelCallStarted{}
-	mi := &file_adlc_v1_events_proto_msgTypes[6]
+	mi := &file_adlc_v1_events_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1150,7 +1240,7 @@ func (x *ModelCallStarted) String() string {
 func (*ModelCallStarted) ProtoMessage() {}
 
 func (x *ModelCallStarted) ProtoReflect() protoreflect.Message {
-	mi := &file_adlc_v1_events_proto_msgTypes[6]
+	mi := &file_adlc_v1_events_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1163,7 +1253,7 @@ func (x *ModelCallStarted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelCallStarted.ProtoReflect.Descriptor instead.
 func (*ModelCallStarted) Descriptor() ([]byte, []int) {
-	return file_adlc_v1_events_proto_rawDescGZIP(), []int{6}
+	return file_adlc_v1_events_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ModelCallStarted) GetCallId() string {
@@ -1214,13 +1304,17 @@ type ModelCallCompleted struct {
 	// call (e.g. thinking blocks). The harness stores but never interprets it.
 	ProviderBlobs []*ProviderBlob      `protobuf:"bytes,6,rep,name=provider_blobs,json=providerBlobs,proto3" json:"provider_blobs,omitempty"`
 	Latency       *durationpb.Duration `protobuf:"bytes,7,opt,name=latency,proto3" json:"latency,omitempty"`
+	// Provider and model that actually answered (differs from
+	// model_call_started when a router fell back).
+	Provider      string `protobuf:"bytes,8,opt,name=provider,proto3" json:"provider,omitempty"`
+	Model         string `protobuf:"bytes,9,opt,name=model,proto3" json:"model,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ModelCallCompleted) Reset() {
 	*x = ModelCallCompleted{}
-	mi := &file_adlc_v1_events_proto_msgTypes[7]
+	mi := &file_adlc_v1_events_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1232,7 +1326,7 @@ func (x *ModelCallCompleted) String() string {
 func (*ModelCallCompleted) ProtoMessage() {}
 
 func (x *ModelCallCompleted) ProtoReflect() protoreflect.Message {
-	mi := &file_adlc_v1_events_proto_msgTypes[7]
+	mi := &file_adlc_v1_events_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1245,7 +1339,7 @@ func (x *ModelCallCompleted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelCallCompleted.ProtoReflect.Descriptor instead.
 func (*ModelCallCompleted) Descriptor() ([]byte, []int) {
-	return file_adlc_v1_events_proto_rawDescGZIP(), []int{7}
+	return file_adlc_v1_events_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ModelCallCompleted) GetCallId() string {
@@ -1297,6 +1391,20 @@ func (x *ModelCallCompleted) GetLatency() *durationpb.Duration {
 	return nil
 }
 
+func (x *ModelCallCompleted) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *ModelCallCompleted) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
 type ModelCallFailed struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	CallId     string                 `protobuf:"bytes,1,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
@@ -1312,7 +1420,7 @@ type ModelCallFailed struct {
 
 func (x *ModelCallFailed) Reset() {
 	*x = ModelCallFailed{}
-	mi := &file_adlc_v1_events_proto_msgTypes[8]
+	mi := &file_adlc_v1_events_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1324,7 +1432,7 @@ func (x *ModelCallFailed) String() string {
 func (*ModelCallFailed) ProtoMessage() {}
 
 func (x *ModelCallFailed) ProtoReflect() protoreflect.Message {
-	mi := &file_adlc_v1_events_proto_msgTypes[8]
+	mi := &file_adlc_v1_events_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1337,7 +1445,7 @@ func (x *ModelCallFailed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelCallFailed.ProtoReflect.Descriptor instead.
 func (*ModelCallFailed) Descriptor() ([]byte, []int) {
-	return file_adlc_v1_events_proto_rawDescGZIP(), []int{8}
+	return file_adlc_v1_events_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ModelCallFailed) GetCallId() string {
@@ -1390,7 +1498,7 @@ type ProviderBlob struct {
 
 func (x *ProviderBlob) Reset() {
 	*x = ProviderBlob{}
-	mi := &file_adlc_v1_events_proto_msgTypes[9]
+	mi := &file_adlc_v1_events_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1402,7 +1510,7 @@ func (x *ProviderBlob) String() string {
 func (*ProviderBlob) ProtoMessage() {}
 
 func (x *ProviderBlob) ProtoReflect() protoreflect.Message {
-	mi := &file_adlc_v1_events_proto_msgTypes[9]
+	mi := &file_adlc_v1_events_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1415,7 +1523,7 @@ func (x *ProviderBlob) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderBlob.ProtoReflect.Descriptor instead.
 func (*ProviderBlob) Descriptor() ([]byte, []int) {
-	return file_adlc_v1_events_proto_rawDescGZIP(), []int{9}
+	return file_adlc_v1_events_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ProviderBlob) GetProvider() string {
@@ -1451,7 +1559,7 @@ type ToolCall struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Provider's tool-call id, used to match results.
 	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	// Namespaced tool name, e.g. "fs.read_file".
+	// Namespaced tool name, e.g. "fs__read_file".
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// Arguments as a JSON object.
 	ArgumentsJson string `protobuf:"bytes,3,opt,name=arguments_json,json=argumentsJson,proto3" json:"arguments_json,omitempty"`
@@ -1461,7 +1569,7 @@ type ToolCall struct {
 
 func (x *ToolCall) Reset() {
 	*x = ToolCall{}
-	mi := &file_adlc_v1_events_proto_msgTypes[10]
+	mi := &file_adlc_v1_events_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1473,7 +1581,7 @@ func (x *ToolCall) String() string {
 func (*ToolCall) ProtoMessage() {}
 
 func (x *ToolCall) ProtoReflect() protoreflect.Message {
-	mi := &file_adlc_v1_events_proto_msgTypes[10]
+	mi := &file_adlc_v1_events_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1486,7 +1594,7 @@ func (x *ToolCall) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolCall.ProtoReflect.Descriptor instead.
 func (*ToolCall) Descriptor() ([]byte, []int) {
-	return file_adlc_v1_events_proto_rawDescGZIP(), []int{10}
+	return file_adlc_v1_events_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ToolCall) GetId() string {
@@ -1522,7 +1630,7 @@ type ToolCallRequested struct {
 
 func (x *ToolCallRequested) Reset() {
 	*x = ToolCallRequested{}
-	mi := &file_adlc_v1_events_proto_msgTypes[11]
+	mi := &file_adlc_v1_events_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1534,7 +1642,7 @@ func (x *ToolCallRequested) String() string {
 func (*ToolCallRequested) ProtoMessage() {}
 
 func (x *ToolCallRequested) ProtoReflect() protoreflect.Message {
-	mi := &file_adlc_v1_events_proto_msgTypes[11]
+	mi := &file_adlc_v1_events_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1547,7 +1655,7 @@ func (x *ToolCallRequested) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolCallRequested.ProtoReflect.Descriptor instead.
 func (*ToolCallRequested) Descriptor() ([]byte, []int) {
-	return file_adlc_v1_events_proto_rawDescGZIP(), []int{11}
+	return file_adlc_v1_events_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ToolCallRequested) GetCall() *ToolCall {
@@ -1588,7 +1696,7 @@ type ToolCallCompleted struct {
 
 func (x *ToolCallCompleted) Reset() {
 	*x = ToolCallCompleted{}
-	mi := &file_adlc_v1_events_proto_msgTypes[12]
+	mi := &file_adlc_v1_events_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1600,7 +1708,7 @@ func (x *ToolCallCompleted) String() string {
 func (*ToolCallCompleted) ProtoMessage() {}
 
 func (x *ToolCallCompleted) ProtoReflect() protoreflect.Message {
-	mi := &file_adlc_v1_events_proto_msgTypes[12]
+	mi := &file_adlc_v1_events_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1613,7 +1721,7 @@ func (x *ToolCallCompleted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolCallCompleted.ProtoReflect.Descriptor instead.
 func (*ToolCallCompleted) Descriptor() ([]byte, []int) {
-	return file_adlc_v1_events_proto_rawDescGZIP(), []int{12}
+	return file_adlc_v1_events_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ToolCallCompleted) GetCallId() string {
@@ -1672,7 +1780,7 @@ type PolicyDecided struct {
 
 func (x *PolicyDecided) Reset() {
 	*x = PolicyDecided{}
-	mi := &file_adlc_v1_events_proto_msgTypes[13]
+	mi := &file_adlc_v1_events_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1684,7 +1792,7 @@ func (x *PolicyDecided) String() string {
 func (*PolicyDecided) ProtoMessage() {}
 
 func (x *PolicyDecided) ProtoReflect() protoreflect.Message {
-	mi := &file_adlc_v1_events_proto_msgTypes[13]
+	mi := &file_adlc_v1_events_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1697,7 +1805,7 @@ func (x *PolicyDecided) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyDecided.ProtoReflect.Descriptor instead.
 func (*PolicyDecided) Descriptor() ([]byte, []int) {
-	return file_adlc_v1_events_proto_rawDescGZIP(), []int{13}
+	return file_adlc_v1_events_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *PolicyDecided) GetCallId() string {
@@ -1747,7 +1855,7 @@ type ApprovalRequested struct {
 
 func (x *ApprovalRequested) Reset() {
 	*x = ApprovalRequested{}
-	mi := &file_adlc_v1_events_proto_msgTypes[14]
+	mi := &file_adlc_v1_events_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1759,7 +1867,7 @@ func (x *ApprovalRequested) String() string {
 func (*ApprovalRequested) ProtoMessage() {}
 
 func (x *ApprovalRequested) ProtoReflect() protoreflect.Message {
-	mi := &file_adlc_v1_events_proto_msgTypes[14]
+	mi := &file_adlc_v1_events_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1772,7 +1880,7 @@ func (x *ApprovalRequested) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovalRequested.ProtoReflect.Descriptor instead.
 func (*ApprovalRequested) Descriptor() ([]byte, []int) {
-	return file_adlc_v1_events_proto_rawDescGZIP(), []int{14}
+	return file_adlc_v1_events_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ApprovalRequested) GetApprovalId() string {
@@ -1809,7 +1917,7 @@ type ApprovalResolved struct {
 
 func (x *ApprovalResolved) Reset() {
 	*x = ApprovalResolved{}
-	mi := &file_adlc_v1_events_proto_msgTypes[15]
+	mi := &file_adlc_v1_events_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1821,7 +1929,7 @@ func (x *ApprovalResolved) String() string {
 func (*ApprovalResolved) ProtoMessage() {}
 
 func (x *ApprovalResolved) ProtoReflect() protoreflect.Message {
-	mi := &file_adlc_v1_events_proto_msgTypes[15]
+	mi := &file_adlc_v1_events_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1834,7 +1942,7 @@ func (x *ApprovalResolved) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovalResolved.ProtoReflect.Descriptor instead.
 func (*ApprovalResolved) Descriptor() ([]byte, []int) {
-	return file_adlc_v1_events_proto_rawDescGZIP(), []int{15}
+	return file_adlc_v1_events_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ApprovalResolved) GetApprovalId() string {
@@ -1879,7 +1987,7 @@ type Checkpoint struct {
 
 func (x *Checkpoint) Reset() {
 	*x = Checkpoint{}
-	mi := &file_adlc_v1_events_proto_msgTypes[16]
+	mi := &file_adlc_v1_events_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1891,7 +1999,7 @@ func (x *Checkpoint) String() string {
 func (*Checkpoint) ProtoMessage() {}
 
 func (x *Checkpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_adlc_v1_events_proto_msgTypes[16]
+	mi := &file_adlc_v1_events_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1904,7 +2012,7 @@ func (x *Checkpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Checkpoint.ProtoReflect.Descriptor instead.
 func (*Checkpoint) Descriptor() ([]byte, []int) {
-	return file_adlc_v1_events_proto_rawDescGZIP(), []int{16}
+	return file_adlc_v1_events_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Checkpoint) GetStep() uint32 {
@@ -1940,7 +2048,7 @@ type ErrorOccurred struct {
 
 func (x *ErrorOccurred) Reset() {
 	*x = ErrorOccurred{}
-	mi := &file_adlc_v1_events_proto_msgTypes[17]
+	mi := &file_adlc_v1_events_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1952,7 +2060,7 @@ func (x *ErrorOccurred) String() string {
 func (*ErrorOccurred) ProtoMessage() {}
 
 func (x *ErrorOccurred) ProtoReflect() protoreflect.Message {
-	mi := &file_adlc_v1_events_proto_msgTypes[17]
+	mi := &file_adlc_v1_events_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1965,7 +2073,7 @@ func (x *ErrorOccurred) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ErrorOccurred.ProtoReflect.Descriptor instead.
 func (*ErrorOccurred) Descriptor() ([]byte, []int) {
-	return file_adlc_v1_events_proto_rawDescGZIP(), []int{17}
+	return file_adlc_v1_events_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ErrorOccurred) GetErrorClass() ErrorClass {
@@ -1993,7 +2101,7 @@ var File_adlc_v1_events_proto protoreflect.FileDescriptor
 
 const file_adlc_v1_events_proto_rawDesc = "" +
 	"\n" +
-	"\x14adlc/v1/events.proto\x12\aadlc.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc1\b\n" +
+	"\x14adlc/v1/events.proto\x12\aadlc.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xf9\b\n" +
 	"\x05Event\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x10\n" +
 	"\x03seq\x18\x02 \x01(\x04R\x03seq\x12.\n" +
@@ -2018,7 +2126,9 @@ const file_adlc_v1_events_proto_rawDesc = "" +
 	"\n" +
 	"checkpoint\x18\x14 \x01(\v2\x13.adlc.v1.CheckpointH\x00R\n" +
 	"checkpoint\x12?\n" +
-	"\x0eerror_occurred\x18\x15 \x01(\v2\x16.adlc.v1.ErrorOccurredH\x00R\rerrorOccurredB\t\n" +
+	"\x0eerror_occurred\x18\x15 \x01(\v2\x16.adlc.v1.ErrorOccurredH\x00R\rerrorOccurred\x126\n" +
+	"\vrun_resumed\x18\x16 \x01(\v2\x13.adlc.v1.RunResumedH\x00R\n" +
+	"runResumedB\t\n" +
 	"\apayloadJ\x04\b\b\x10\n" +
 	"\"\xc7\x01\n" +
 	"\x04Cost\x12!\n" +
@@ -2048,7 +2158,13 @@ const file_adlc_v1_events_proto_rawDesc = "" +
 	"\vworkflow_id\x18\x04 \x01(\tR\n" +
 	"workflowId\x12\x17\n" +
 	"\atask_id\x18\x05 \x01(\tR\x06taskId\x12-\n" +
-	"\x13resumed_from_run_id\x18\x06 \x01(\tR\x10resumedFromRunId\"\xb4\x01\n" +
+	"\x13resumed_from_run_id\x18\x06 \x01(\tR\x10resumedFromRunId\"\xab\x01\n" +
+	"\n" +
+	"RunResumed\x12\x1b\n" +
+	"\tnext_step\x18\x01 \x01(\rR\bnextStep\x126\n" +
+	"\x17verified_checkpoint_seq\x18\x02 \x01(\x04R\x15verifiedCheckpointSeq\x120\n" +
+	"\x14abandoned_tool_calls\x18\x03 \x01(\rR\x12abandonedToolCalls\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xb4\x01\n" +
 	"\fRunCompleted\x124\n" +
 	"\vstop_reason\x18\x01 \x01(\x0e2\x13.adlc.v1.StopReasonR\n" +
 	"stopReason\x12\x16\n" +
@@ -2060,7 +2176,7 @@ const file_adlc_v1_events_proto_rawDesc = "" +
 	"\x04step\x18\x02 \x01(\rR\x04step\x12\x1a\n" +
 	"\bprovider\x18\x03 \x01(\tR\bprovider\x12\x14\n" +
 	"\x05model\x18\x04 \x01(\tR\x05model\x12\x18\n" +
-	"\aattempt\x18\x05 \x01(\rR\aattempt\"\xd8\x02\n" +
+	"\aattempt\x18\x05 \x01(\rR\aattempt\"\x8a\x03\n" +
 	"\x12ModelCallCompleted\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x12:\n" +
 	"\rfinish_reason\x18\x02 \x01(\x0e2\x15.adlc.v1.FinishReasonR\ffinishReason\x124\n" +
@@ -2069,7 +2185,9 @@ const file_adlc_v1_events_proto_rawDesc = "" +
 	"\n" +
 	"tool_calls\x18\x05 \x03(\v2\x11.adlc.v1.ToolCallR\ttoolCalls\x12<\n" +
 	"\x0eprovider_blobs\x18\x06 \x03(\v2\x15.adlc.v1.ProviderBlobR\rproviderBlobs\x123\n" +
-	"\alatency\x18\a \x01(\v2\x19.google.protobuf.DurationR\alatency\"\xba\x01\n" +
+	"\alatency\x18\a \x01(\v2\x19.google.protobuf.DurationR\alatency\x12\x1a\n" +
+	"\bprovider\x18\b \x01(\tR\bprovider\x12\x14\n" +
+	"\x05model\x18\t \x01(\tR\x05model\"\xba\x01\n" +
 	"\x0fModelCallFailed\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x124\n" +
 	"\verror_class\x18\x02 \x01(\x0e2\x13.adlc.v1.ErrorClassR\n" +
@@ -2196,7 +2314,7 @@ func file_adlc_v1_events_proto_rawDescGZIP() []byte {
 }
 
 var file_adlc_v1_events_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_adlc_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_adlc_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_adlc_v1_events_proto_goTypes = []any{
 	(StopReason)(0),               // 0: adlc.v1.StopReason
 	(BudgetKind)(0),               // 1: adlc.v1.BudgetKind
@@ -2210,58 +2328,60 @@ var file_adlc_v1_events_proto_goTypes = []any{
 	(*TraceContext)(nil),          // 9: adlc.v1.TraceContext
 	(*Budget)(nil),                // 10: adlc.v1.Budget
 	(*RunStarted)(nil),            // 11: adlc.v1.RunStarted
-	(*RunCompleted)(nil),          // 12: adlc.v1.RunCompleted
-	(*ModelCallStarted)(nil),      // 13: adlc.v1.ModelCallStarted
-	(*ModelCallCompleted)(nil),    // 14: adlc.v1.ModelCallCompleted
-	(*ModelCallFailed)(nil),       // 15: adlc.v1.ModelCallFailed
-	(*ProviderBlob)(nil),          // 16: adlc.v1.ProviderBlob
-	(*ToolCall)(nil),              // 17: adlc.v1.ToolCall
-	(*ToolCallRequested)(nil),     // 18: adlc.v1.ToolCallRequested
-	(*ToolCallCompleted)(nil),     // 19: adlc.v1.ToolCallCompleted
-	(*PolicyDecided)(nil),         // 20: adlc.v1.PolicyDecided
-	(*ApprovalRequested)(nil),     // 21: adlc.v1.ApprovalRequested
-	(*ApprovalResolved)(nil),      // 22: adlc.v1.ApprovalResolved
-	(*Checkpoint)(nil),            // 23: adlc.v1.Checkpoint
-	(*ErrorOccurred)(nil),         // 24: adlc.v1.ErrorOccurred
-	(*timestamppb.Timestamp)(nil), // 25: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),   // 26: google.protobuf.Duration
+	(*RunResumed)(nil),            // 12: adlc.v1.RunResumed
+	(*RunCompleted)(nil),          // 13: adlc.v1.RunCompleted
+	(*ModelCallStarted)(nil),      // 14: adlc.v1.ModelCallStarted
+	(*ModelCallCompleted)(nil),    // 15: adlc.v1.ModelCallCompleted
+	(*ModelCallFailed)(nil),       // 16: adlc.v1.ModelCallFailed
+	(*ProviderBlob)(nil),          // 17: adlc.v1.ProviderBlob
+	(*ToolCall)(nil),              // 18: adlc.v1.ToolCall
+	(*ToolCallRequested)(nil),     // 19: adlc.v1.ToolCallRequested
+	(*ToolCallCompleted)(nil),     // 20: adlc.v1.ToolCallCompleted
+	(*PolicyDecided)(nil),         // 21: adlc.v1.PolicyDecided
+	(*ApprovalRequested)(nil),     // 22: adlc.v1.ApprovalRequested
+	(*ApprovalResolved)(nil),      // 23: adlc.v1.ApprovalResolved
+	(*Checkpoint)(nil),            // 24: adlc.v1.Checkpoint
+	(*ErrorOccurred)(nil),         // 25: adlc.v1.ErrorOccurred
+	(*timestamppb.Timestamp)(nil), // 26: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),   // 27: google.protobuf.Duration
 }
 var file_adlc_v1_events_proto_depIdxs = []int32{
-	25, // 0: adlc.v1.Event.time:type_name -> google.protobuf.Timestamp
+	26, // 0: adlc.v1.Event.time:type_name -> google.protobuf.Timestamp
 	8,  // 1: adlc.v1.Event.cost:type_name -> adlc.v1.Cost
 	9,  // 2: adlc.v1.Event.trace:type_name -> adlc.v1.TraceContext
 	11, // 3: adlc.v1.Event.run_started:type_name -> adlc.v1.RunStarted
-	12, // 4: adlc.v1.Event.run_completed:type_name -> adlc.v1.RunCompleted
-	13, // 5: adlc.v1.Event.model_call_started:type_name -> adlc.v1.ModelCallStarted
-	14, // 6: adlc.v1.Event.model_call_completed:type_name -> adlc.v1.ModelCallCompleted
-	15, // 7: adlc.v1.Event.model_call_failed:type_name -> adlc.v1.ModelCallFailed
-	18, // 8: adlc.v1.Event.tool_call_requested:type_name -> adlc.v1.ToolCallRequested
-	19, // 9: adlc.v1.Event.tool_call_completed:type_name -> adlc.v1.ToolCallCompleted
-	20, // 10: adlc.v1.Event.policy_decided:type_name -> adlc.v1.PolicyDecided
-	21, // 11: adlc.v1.Event.approval_requested:type_name -> adlc.v1.ApprovalRequested
-	22, // 12: adlc.v1.Event.approval_resolved:type_name -> adlc.v1.ApprovalResolved
-	23, // 13: adlc.v1.Event.checkpoint:type_name -> adlc.v1.Checkpoint
-	24, // 14: adlc.v1.Event.error_occurred:type_name -> adlc.v1.ErrorOccurred
-	26, // 15: adlc.v1.Budget.max_wall_clock:type_name -> google.protobuf.Duration
-	10, // 16: adlc.v1.RunStarted.budget:type_name -> adlc.v1.Budget
-	0,  // 17: adlc.v1.RunCompleted.stop_reason:type_name -> adlc.v1.StopReason
-	1,  // 18: adlc.v1.RunCompleted.exhausted_budget:type_name -> adlc.v1.BudgetKind
-	2,  // 19: adlc.v1.ModelCallCompleted.finish_reason:type_name -> adlc.v1.FinishReason
-	17, // 20: adlc.v1.ModelCallCompleted.tool_calls:type_name -> adlc.v1.ToolCall
-	16, // 21: adlc.v1.ModelCallCompleted.provider_blobs:type_name -> adlc.v1.ProviderBlob
-	26, // 22: adlc.v1.ModelCallCompleted.latency:type_name -> google.protobuf.Duration
-	6,  // 23: adlc.v1.ModelCallFailed.error_class:type_name -> adlc.v1.ErrorClass
-	17, // 24: adlc.v1.ToolCallRequested.call:type_name -> adlc.v1.ToolCall
-	3,  // 25: adlc.v1.ToolCallRequested.risk_class:type_name -> adlc.v1.RiskClass
-	26, // 26: adlc.v1.ToolCallCompleted.duration:type_name -> google.protobuf.Duration
-	4,  // 27: adlc.v1.PolicyDecided.decision:type_name -> adlc.v1.Decision
-	5,  // 28: adlc.v1.PolicyDecided.source:type_name -> adlc.v1.DecisionSource
-	6,  // 29: adlc.v1.ErrorOccurred.error_class:type_name -> adlc.v1.ErrorClass
-	30, // [30:30] is the sub-list for method output_type
-	30, // [30:30] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	13, // 4: adlc.v1.Event.run_completed:type_name -> adlc.v1.RunCompleted
+	14, // 5: adlc.v1.Event.model_call_started:type_name -> adlc.v1.ModelCallStarted
+	15, // 6: adlc.v1.Event.model_call_completed:type_name -> adlc.v1.ModelCallCompleted
+	16, // 7: adlc.v1.Event.model_call_failed:type_name -> adlc.v1.ModelCallFailed
+	19, // 8: adlc.v1.Event.tool_call_requested:type_name -> adlc.v1.ToolCallRequested
+	20, // 9: adlc.v1.Event.tool_call_completed:type_name -> adlc.v1.ToolCallCompleted
+	21, // 10: adlc.v1.Event.policy_decided:type_name -> adlc.v1.PolicyDecided
+	22, // 11: adlc.v1.Event.approval_requested:type_name -> adlc.v1.ApprovalRequested
+	23, // 12: adlc.v1.Event.approval_resolved:type_name -> adlc.v1.ApprovalResolved
+	24, // 13: adlc.v1.Event.checkpoint:type_name -> adlc.v1.Checkpoint
+	25, // 14: adlc.v1.Event.error_occurred:type_name -> adlc.v1.ErrorOccurred
+	12, // 15: adlc.v1.Event.run_resumed:type_name -> adlc.v1.RunResumed
+	27, // 16: adlc.v1.Budget.max_wall_clock:type_name -> google.protobuf.Duration
+	10, // 17: adlc.v1.RunStarted.budget:type_name -> adlc.v1.Budget
+	0,  // 18: adlc.v1.RunCompleted.stop_reason:type_name -> adlc.v1.StopReason
+	1,  // 19: adlc.v1.RunCompleted.exhausted_budget:type_name -> adlc.v1.BudgetKind
+	2,  // 20: adlc.v1.ModelCallCompleted.finish_reason:type_name -> adlc.v1.FinishReason
+	18, // 21: adlc.v1.ModelCallCompleted.tool_calls:type_name -> adlc.v1.ToolCall
+	17, // 22: adlc.v1.ModelCallCompleted.provider_blobs:type_name -> adlc.v1.ProviderBlob
+	27, // 23: adlc.v1.ModelCallCompleted.latency:type_name -> google.protobuf.Duration
+	6,  // 24: adlc.v1.ModelCallFailed.error_class:type_name -> adlc.v1.ErrorClass
+	18, // 25: adlc.v1.ToolCallRequested.call:type_name -> adlc.v1.ToolCall
+	3,  // 26: adlc.v1.ToolCallRequested.risk_class:type_name -> adlc.v1.RiskClass
+	27, // 27: adlc.v1.ToolCallCompleted.duration:type_name -> google.protobuf.Duration
+	4,  // 28: adlc.v1.PolicyDecided.decision:type_name -> adlc.v1.Decision
+	5,  // 29: adlc.v1.PolicyDecided.source:type_name -> adlc.v1.DecisionSource
+	6,  // 30: adlc.v1.ErrorOccurred.error_class:type_name -> adlc.v1.ErrorClass
+	31, // [31:31] is the sub-list for method output_type
+	31, // [31:31] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_adlc_v1_events_proto_init() }
@@ -2282,6 +2402,7 @@ func file_adlc_v1_events_proto_init() {
 		(*Event_ApprovalResolved)(nil),
 		(*Event_Checkpoint)(nil),
 		(*Event_ErrorOccurred)(nil),
+		(*Event_RunResumed)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2289,7 +2410,7 @@ func file_adlc_v1_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_adlc_v1_events_proto_rawDesc), len(file_adlc_v1_events_proto_rawDesc)),
 			NumEnums:      7,
-			NumMessages:   18,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

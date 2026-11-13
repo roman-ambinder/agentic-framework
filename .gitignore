@@ -34,3 +34,6 @@ go.work.sum
 
 # ADLC build output
 /bin/
+
+# Eval run reports
+/evals/results/

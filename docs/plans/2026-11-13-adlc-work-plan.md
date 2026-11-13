@@ -41,6 +41,15 @@ results, written down in §8 before work moves on.
 | 0.1 | Repo bootstrap, CLI, CI | ✅ merged (PR #1) |
 | 0.2 | Event schema (protobuf), buf lint/breaking | ✅ merged (PR #1) |
 | 0.3 | Append-only SQLite event log + fold | ✅ merged (PR #2) |
+| 0.0 | Move to Go 1.26, pin all tools | ✅ merged (PR #5) |
+| 0.4, 1.4.1, E.1 | Wave 1: model package, Docker sandbox, ledger fixture | ✅ merged (PR #6) |
+| 0.5.1–0.5.4, 0.5b, 0.6, 0.7.1, 0.7.2, 0.8, 0.9.1, 0.9.2, 0.10, 0.11.1, 0.11.2 | Rest of M0 | ✅ on `integration` |
+| E.2, E.3 | Seeded bugs, suite loader and self-check | ✅ on `integration` |
+| 1.1–1.3, 1.4.2, 1.5, 1.6.1, 1.6.2, 1.7, 1.8, 1.9, 1.11 | M1 code tasks | ✅ on `integration` |
+| E.4 | Manual baseline (a person runs it; sets gate G1's numbers) | ⏳ open |
+| 1.10 | Coder agent iteration (needs model API keys and a Docker host) | ⏳ open |
+
+M0 demo works: `adlc run examples/hello.yaml --task "What does greeting.txt say?" --fake-script examples/hello.fake.json`, then `adlc trace <run>` and `adlc cost`. Gate G0 (a real model through the loop) needs an API key and is not recorded yet.
 
 ## 3. M0 — Walking skeleton
 

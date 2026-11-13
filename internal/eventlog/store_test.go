@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -339,4 +340,34 @@ func seqs(evs []*adlcv1.Event) []uint64 {
 		out[i] = ev.GetSeq()
 	}
 	return out
+}
+
+func TestRunsSorted(t *testing.T) {
+	s := openStore(t, "")
+	ctx := context.Background()
+	// Times run in the opposite order to the ids, so a sort by time would
+	// not give the expected result.
+	for i, id := range []string{"b", "a", "c"} {
+		ev := started(id)
+		ev.Time = timestamppb.New(t0.Add(time.Duration(3-i) * time.Second))
+		mustAppend(t, s, ev)
+	}
+	got, err := s.Runs(ctx)
+	if err != nil {
+		t.Fatalf("Runs: %v", err)
+	}
+	if want := []string{"a", "b", "c"}; !slices.Equal(got, want) {
+		t.Errorf("Runs = %v, want %v", got, want)
+	}
+}
+
+func TestRunsEmptyStore(t *testing.T) {
+	s := openStore(t, "")
+	got, err := s.Runs(context.Background())
+	if err != nil {
+		t.Fatalf("Runs: %v", err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Errorf("Runs = %#v, want empty non-nil slice", got)
+	}
 }

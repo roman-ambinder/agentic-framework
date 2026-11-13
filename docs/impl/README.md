@@ -67,8 +67,8 @@ A task can start once everything in "Depends on" is merged.
 | 1.5 | [shell, git, search tools in the sandbox](tasks/1.5-sandbox-tools.md) | M | 0.7.2, 1.4.2 |
 | 1.6.1 | [Context manager: budgets and compaction](tasks/1.6.1-context-budgets.md) | M | 0.5.1 |
 | 1.6.2 | [Context manager: stable prefix for caching](tasks/1.6.2-context-caching.md) | S | 1.6.1, 1.1 |
-| 1.7 | [Resume a crashed run](tasks/1.7-resume.md) | M | 0.5.4, 1.4.2 |
-| 1.8 | [Eval runner](tasks/1.8-eval-runner.md) | M | E.3, 1.5 |
+| 1.7 | [Resume a crashed run](tasks/1.7-resume.md) | M | 0.5.4, 1.4.2, 0.9.2 |
+| 1.8 | [Eval runner](tasks/1.8-eval-runner.md) | M | E.3, 1.5, 0.9.2 |
 | 1.9 | [Graders and report](tasks/1.9-graders.md) | M | 1.8 |
 | 1.10 | [Coder agent](tasks/1.10-coder-agent.md) | L | 1.9 |
 | 1.11 | [`adlc cost`](tasks/1.11-cost.md) | S | 0.9.2 |

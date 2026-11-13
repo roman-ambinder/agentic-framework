@@ -262,6 +262,10 @@ func (s *RunState) apply(ev *adlcv1.Event) error {
 	case *adlcv1.Event_ErrorOccurred:
 		s.Errors++
 
+	case *adlcv1.Event_RunResumed:
+		// Changes nothing: a new field would change every digest. The checks
+		// above already allow it only while the run is running.
+
 	case nil:
 		s.UnknownEvents++
 

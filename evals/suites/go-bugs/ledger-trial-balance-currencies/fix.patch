@@ -1,0 +1,28 @@
+diff --git b/ledger/ledger.go a/ledger/ledger.go
+index 3a0928f..d7c7f2b 100644
+--- b/ledger/ledger.go
++++ a/ledger/ledger.go
+@@ -84,20 +84,9 @@ func (l *Ledger) TrialBalance(asOf time.Time) (TrialBalance, error) {
+ 	for _, id := range slices.Sorted(maps.Keys(lines)) {
+ 		tb.Lines = append(tb.Lines, *lines[id])
+ 	}
+-	for _, line := range tb.Lines {
+-		cur := line.Debit.Currency
+-		if n := len(tb.Totals); n == 0 || tb.Totals[n-1].Currency != cur {
+-			tb.Totals = append(tb.Totals, CurrencyTotal{Currency: cur, Debit: money.New(0, cur), Credit: money.New(0, cur)})
+-		}
+-		t := &tb.Totals[len(tb.Totals)-1]
+-		if err := addTo(&t.Debit, line.Debit); err != nil {
+-			return TrialBalance{}, fmt.Errorf("ledger: trial balance: %w", err)
+-		}
+-		if err := addTo(&t.Credit, line.Credit); err != nil {
+-			return TrialBalance{}, fmt.Errorf("ledger: trial balance: %w", err)
+-		}
+-	}
+-	for _, t := range tb.Totals {
++	for _, c := range slices.Sorted(maps.Keys(totals)) {
++		t := totals[c]
++		tb.Totals = append(tb.Totals, *t)
+ 		if t.Debit != t.Credit {
+ 			tb.Balanced = false
+ 		}

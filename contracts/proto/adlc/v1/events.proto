@@ -48,6 +48,7 @@ message Event {
     ApprovalResolved approval_resolved = 19;
     Checkpoint checkpoint = 20;
     ErrorOccurred error_occurred = 21;
+    RunResumed run_resumed = 22;
   }
 }
 
@@ -88,6 +89,19 @@ message RunStarted {
   string task_id = 5;
   // Run this one was resumed from, if any.
   string resumed_from_run_id = 6;
+}
+
+// RunResumed is written when a run that stopped without run_completed is
+// continued by `adlc resume`.
+message RunResumed {
+  // Step the resumed run continues with.
+  uint32 next_step = 1;
+  // seq of the last checkpoint that was verified, 0 if the run had none.
+  uint64 verified_checkpoint_seq = 2;
+  // Tool calls closed as abandoned because the process died during them.
+  uint32 abandoned_tool_calls = 3;
+  // Why the run is resumed, for people reading the log.
+  string reason = 4;
 }
 
 message RunCompleted {
@@ -146,6 +160,10 @@ message ModelCallCompleted {
   // call (e.g. thinking blocks). The harness stores but never interprets it.
   repeated ProviderBlob provider_blobs = 6;
   google.protobuf.Duration latency = 7;
+  // Provider and model that actually answered (differs from
+  // model_call_started when a router fell back).
+  string provider = 8;
+  string model = 9;
 }
 
 // FinishReason is the provider-neutral reason a model call ended.
@@ -185,7 +203,7 @@ message ProviderBlob {
 message ToolCall {
   // Provider's tool-call id, used to match results.
   string id = 1;
-  // Namespaced tool name, e.g. "fs.read_file".
+  // Namespaced tool name, e.g. "fs__read_file".
   string name = 2;
   // Arguments as a JSON object.
   string arguments_json = 3;

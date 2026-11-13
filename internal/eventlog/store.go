@@ -252,3 +252,26 @@ func Kind(ev *adlcv1.Event) string {
 	}
 	return string(f.Name())
 }
+
+// Runs returns the ids of all runs in the store, sorted ascending.
+// An empty store returns an empty slice and no error.
+func (s *Store) Runs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT run_id FROM events ORDER BY run_id`)
+	if err != nil {
+		return nil, fmt.Errorf("eventlog: list runs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("eventlog: scan run id: %w", err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("eventlog: list runs: %w", err)
+	}
+	return out, nil
+}

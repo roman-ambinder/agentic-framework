@@ -1,0 +1,13 @@
+diff --git a/ledger/ledger.go b/ledger/ledger.go
+index d7c7f2b..0082211 100644
+--- a/ledger/ledger.go
++++ b/ledger/ledger.go
+@@ -52,7 +52,7 @@ func (l *Ledger) Balance(accountID string, asOf time.Time) (money.Amount, error)
+ 	}
+ 	total := money.New(0, acc.Currency)
+ 	for _, e := range l.Journal.Entries() {
+-		if e.Date.After(asOf) {
++		if !e.Date.Before(asOf) {
+ 			continue
+ 		}
+ 		sum, err := postingsTo(e.Postings, accountID, acc.Currency)

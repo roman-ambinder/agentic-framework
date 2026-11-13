@@ -1,0 +1,10 @@
+id: statement-opening-sign
+difficulty: hard
+title: "Customer statements: running balance never reaches the closing balance"
+fixture: ledger
+test_package: ledger
+hidden_tests:
+  - TestHiddenLiabilityStatementOpening
+timeout: 2m
+fix_files:
+  - ledger/statement.go

@@ -88,6 +88,10 @@ func checkpoint(step uint32) *adlcv1.Event {
 	}}}
 }
 
+func resumed() *adlcv1.Event {
+	return &adlcv1.Event{Payload: &adlcv1.Event_RunResumed{RunResumed: &adlcv1.RunResumed{NextStep: 2, Reason: "test"}}}
+}
+
 func failure() *adlcv1.Event {
 	return &adlcv1.Event{Payload: &adlcv1.Event_ErrorOccurred{ErrorOccurred: &adlcv1.ErrorOccurred{Message: "boom"}}}
 }
@@ -248,6 +252,12 @@ func TestFoldInvalidLogs(t *testing.T) {
 		{"event after finish", func() []*adlcv1.Event {
 			return logOf(completed(adlcv1.StopReason_STOP_REASON_COMPLETED), failure())
 		}},
+		{"run_resumed after finish", func() []*adlcv1.Event {
+			return logOf(completed(adlcv1.StopReason_STOP_REASON_COMPLETED), resumed())
+		}},
+		{"run_resumed while paused", func() []*adlcv1.Event {
+			return logOf(approvalRequested("a1"), completed(adlcv1.StopReason_STOP_REASON_AWAITING_APPROVAL), resumed())
+		}},
 		{"paused run continues without approval", func() []*adlcv1.Event {
 			return logOf(approvalRequested("a1"), completed(adlcv1.StopReason_STOP_REASON_AWAITING_APPROVAL), failure())
 		}},
@@ -315,12 +325,13 @@ func TestEveryKindIsHandled(t *testing.T) {
 		"approval_resolved":    approvalResolved("a1", true),
 		"checkpoint":           checkpoint(1),
 		"error_occurred":       failure(),
+		"run_resumed":          resumed(),
 		"run_completed":        completed(adlcv1.StopReason_STOP_REASON_COMPLETED),
 	}
 	order := []string{
 		"model_call_started", "model_call_completed", "model_call_failed",
 		"tool_call_requested", "policy_decided", "tool_call_completed",
-		"approval_requested", "approval_resolved", "checkpoint", "error_occurred", "run_completed",
+		"approval_requested", "approval_resolved", "checkpoint", "error_occurred", "run_resumed", "run_completed",
 	}
 	var evs []*adlcv1.Event
 	for _, k := range order {
@@ -340,5 +351,21 @@ func TestEveryKindIsHandled(t *testing.T) {
 	}
 	if s := mustFold(t, evs); s.UnknownEvents != 0 {
 		t.Errorf("%d known kinds were treated as unknown", s.UnknownEvents)
+	}
+}
+
+// run_resumed must not add anything to RunState: a new field would change the
+// digest of every existing log.
+func TestFoldRunResumedChangesOnlyPosition(t *testing.T) {
+	before := mustFold(t, logOf(modelStarted(1), failure()))
+	after := *before
+	evs := logOf(modelStarted(1), failure(), resumed())
+	got := mustFold(t, evs)
+	after.LastSeq, after.LastEventAt = got.LastSeq, got.LastEventAt
+	if !reflect.DeepEqual(*got, after) {
+		t.Fatalf("run_resumed changed more than seq and time:\n got %+v\nwant %+v", *got, after)
+	}
+	if got.Status != StatusRunning {
+		t.Fatalf("status = %v, want running", got.Status)
 	}
 }

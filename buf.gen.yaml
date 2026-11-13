@@ -8,4 +8,7 @@ plugins:
   - local: ["go", "tool", "-modfile=tooling/go.mod", "protoc-gen-go"]
     out: gen/go
     opt: paths=source_relative
+  - local: ["go", "tool", "-modfile=tooling/go.mod", "protoc-gen-go-grpc"]
+    out: gen/go
+    opt: paths=source_relative
 clean: true

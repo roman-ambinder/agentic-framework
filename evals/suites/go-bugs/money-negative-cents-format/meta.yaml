@@ -1,0 +1,10 @@
+id: money-negative-cents-format
+difficulty: easy
+title: Small negative amounts print as positive
+fixture: ledger
+test_package: money
+hidden_tests:
+  - TestHiddenStringNegativeCents
+timeout: 2m
+fix_files:
+  - money/money.go

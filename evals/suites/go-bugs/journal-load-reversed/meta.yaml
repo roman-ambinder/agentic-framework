@@ -1,0 +1,10 @@
+id: journal-load-reversed
+difficulty: hard
+title: Refund reversed twice
+fixture: ledger
+test_package: journal
+hidden_tests:
+  - TestHiddenLoadKeepsReversals
+timeout: 2m
+fix_files:
+  - journal/store.go

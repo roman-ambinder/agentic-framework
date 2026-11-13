@@ -1,0 +1,6 @@
+name: tiny
+version: 1
+model:
+  provider: fake
+policy:
+  default: deny

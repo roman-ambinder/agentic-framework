@@ -1,0 +1,10 @@
+id: statement-fx-opening-date
+difficulty: hard
+title: "USD statement: February doesn't start where January ended"
+fixture: ledger
+test_package: ledger
+hidden_tests:
+  - TestHiddenConvertedOpeningMatchesPreviousClosing
+timeout: 2m
+fix_files:
+  - ledger/statement.go

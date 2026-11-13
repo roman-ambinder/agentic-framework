@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -20,11 +21,30 @@ const (
 // WorkspacePath is where the workspace lives inside every sandbox.
 const WorkspacePath = "/workspace"
 
+// SandboxUID and SandboxGID are the user every sandbox process runs as.
+const (
+	SandboxUID = 65532
+	SandboxGID = 65532
+)
+
+// PidsLimit caps the number of processes in a sandbox.
+const PidsLimit = 512
+
+// MaxWorkspaceBytes caps the total size of files copied into a sandbox.
+const MaxWorkspaceBytes = 512 << 20 // 512 MiB
+
+// DefaultHome is HOME inside a sandbox unless Spec.Env sets it.
+const DefaultHome = "/tmp"
+
 // MaxOutputBytes caps ExecResult.Stdout and ExecResult.Stderr each.
 const MaxOutputBytes = 8 << 20 // 8 MiB
 
 // TruncatedMarker is appended to Stdout/Stderr when they were capped.
 const TruncatedMarker = "\n[output truncated by sandbox]\n"
+
+// SandboxIDPlaceholder in a tool server's command line is replaced with the
+// sandbox's id by whoever starts the servers after creating the sandbox.
+const SandboxIDPlaceholder = "{{sandbox_id}}"
 
 var (
 	// ErrInvalidSpec means Create was called with a bad Spec.
@@ -37,10 +57,10 @@ var (
 type Spec struct {
 	RunID        string            // required; stored as label adlc.run_id
 	Image        string            // required, e.g. "golang:1.26"
-	WorkspaceDir string            // host dir copied into /workspace (task 1.4.2)
-	CPUs         float64           // 0 = no limit (task 1.4.2)
-	MemoryBytes  int64             // 0 = no limit (task 1.4.2)
-	Network      bool              // false = no network (task 1.4.2)
+	WorkspaceDir string            // host dir copied into /workspace; "" = empty /workspace
+	CPUs         float64           // 0 = no limit
+	MemoryBytes  int64             // 0 = no limit
+	Network      bool              // false = no network
 	Env          map[string]string // the only environment the container gets
 }
 
@@ -102,4 +122,14 @@ func CapOutput(b []byte, max int) []byte {
 	out := make([]byte, 0, max+len(TruncatedMarker))
 	out = append(out, b[:max]...)
 	return append(out, TruncatedMarker...)
+}
+
+// ExpandArgs returns a copy of args with every SandboxIDPlaceholder (also
+// inside a longer argument) replaced by h.ID.
+func ExpandArgs(args []string, h Handle) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = strings.ReplaceAll(a, SandboxIDPlaceholder, h.ID)
+	}
+	return out
 }

@@ -17,7 +17,8 @@ LINT     := $(TOOL) golangci-lint
 AGAINST  ?= .git\#branch=main
 
 .PHONY: help build test test-race test-docker lint fmt tidy tidy-check ci clean \
-        proto proto-lint proto-check proto-breaking fixtures-test
+        proto proto-lint proto-check proto-breaking fixtures-test bugs-check evals-check \
+        python-hook-setup test-plugin-python
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-15s %s\n", $$1, $$2}'
@@ -32,13 +33,19 @@ test-race: ## Run unit tests with the race detector
 	go test -race ./...
 
 test-docker: ## Run tests that need a Docker daemon
-	go test -race -tags docker -count=1 ./internal/sandbox/...
+	go test -race -tags docker -count=1 ./internal/sandbox/... ./internal/tools/...
 
 fixtures-test: ## Test the eval fixture repositories
 	cd evals/fixtures/ledger && go vet ./... && go test -count=1 ./...
 
+bugs-check: ## Check every seeded bug (bug applies, hidden test fails, fix works)
+	@for d in evals/suites/go-bugs/*/; do evals/scripts/check-bug.sh "$$(basename "$$d")" || exit 1; done
+
+evals-check: ## Check every seeded bug: hidden tests fail on the bug, pass on the fix
+	go test -tags evals -count=1 -run 'TestSeededBugsBehave' ./internal/evals/
+
 lint: ## Run golangci-lint
-	$(LINT) run ./...
+	$(LINT) run --allow-parallel-runners ./...
 
 fmt: ## Format code
 	$(LINT) fmt ./...
@@ -68,6 +75,19 @@ proto-check: ## Fail if gen/go is out of date with contracts/proto
 
 proto-breaking: ## Fail on breaking schema changes vs AGAINST (default: main branch)
 	$(BUF) breaking --against '$(AGAINST)'
+
+PYHOOK := examples/plugins/python-hook
+
+python-hook-setup: ## Create the Python hook plugin's venv and generate its stubs
+	python3 -m venv $(PYHOOK)/.venv
+	$(PYHOOK)/.venv/bin/pip install --quiet -r $(PYHOOK)/requirements.txt
+	mkdir -p $(PYHOOK)/gen
+	$(PYHOOK)/.venv/bin/python -m grpc_tools.protoc -I contracts/proto \
+	  --python_out=$(PYHOOK)/gen --grpc_python_out=$(PYHOOK)/gen \
+	  adlc/v1/events.proto adlc/v1/plugin.proto
+
+test-plugin-python: python-hook-setup ## Run the Python plugin integration test
+	go test -tags plugin_python -count=1 -run 'Python' ./internal/plugin/
 
 ci: tidy-check proto-lint proto-check lint test-race fixtures-test build ## Everything CI runs (proto-breaking runs on PRs only)
 

@@ -144,3 +144,14 @@ func TestFakeCountTokens(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestFakeSetsProviderAndModel(t *testing.T) {
+	f := NewFake(textTurn("one"))
+	resp, err := f.Generate(context.Background(), &Request{Model: "fake-x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Provider != "fake" || resp.Model != "fake-x" {
+		t.Errorf("provider/model = %q/%q, want fake/fake-x", resp.Provider, resp.Model)
+	}
+}

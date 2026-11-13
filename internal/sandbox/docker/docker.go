@@ -2,6 +2,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -63,29 +65,33 @@ func (b *Backend) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Handle
 	if err := b.ensureImage(ctx, spec.Image); err != nil {
 		return sandbox.Handle{}, err
 	}
+	archive, skipped, err := sandbox.WorkspaceTar(spec.WorkspaceDir, sandbox.SandboxUID, sandbox.SandboxGID, sandbox.MaxWorkspaceBytes)
+	if err != nil {
+		return sandbox.Handle{}, fmt.Errorf("docker: %w", err)
+	}
 	suffix, err := randomHex(4)
 	if err != nil {
 		return sandbox.Handle{}, fmt.Errorf("docker: random name: %w", err)
 	}
-	// Applied in task 1.4.2: spec.WorkspaceDir, spec.CPUs, spec.MemoryBytes
-	// and spec.Network (false = no network) are not applied yet.
-	cfg := &container.Config{
-		Image:      spec.Image,
-		Cmd:        []string{"sh", "-c", keepAlive},
-		WorkingDir: sandbox.WorkspacePath,
-		Env:        envList(spec.Env),
-		Labels: map[string]string{
-			sandbox.LabelManaged: "true",
-			sandbox.LabelRunID:   spec.RunID,
-		},
+	cfg := containerConfig(spec)
+	if skipped > 0 {
+		cfg.Labels[labelWorkspaceSkipped] = strconv.Itoa(skipped)
 	}
-	init := true
-	hc := &container.HostConfig{Init: &init} // reaps zombie processes
 	name := "adlc-" + sanitize(spec.RunID) + "-" + suffix
 
-	created, err := b.cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: cfg, HostConfig: hc, Name: name})
+	created, err := b.cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: cfg, HostConfig: hostConfig(spec), Name: name})
 	if err != nil {
 		return sandbox.Handle{}, fmt.Errorf("docker: create container: %w", err)
+	}
+	// Copy before start: copying into a created container is allowed.
+	_, err = b.cli.CopyToContainer(ctx, created.ID, client.CopyToContainerOptions{
+		DestinationPath: "/",
+		Content:         bytes.NewReader(archive),
+		CopyUIDGID:      true, // without it Docker creates the files as root
+	})
+	if err != nil {
+		b.forceRemove(created.ID)
+		return sandbox.Handle{}, fmt.Errorf("docker: copy workspace: %w", err)
 	}
 	if _, err := b.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		b.forceRemove(created.ID)
@@ -95,6 +101,69 @@ func (b *Backend) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Handle
 	b.specs[created.ID] = spec
 	b.mu.Unlock()
 	return sandbox.Handle{ID: created.ID}, nil
+}
+
+// labelWorkspaceSkipped holds the number of symlinks and special files that
+// were not copied into the sandbox. It is set only when that number is > 0.
+const labelWorkspaceSkipped = "adlc.workspace_skipped"
+
+func labels(spec sandbox.Spec) map[string]string {
+	return map[string]string{
+		sandbox.LabelManaged: "true",
+		sandbox.LabelRunID:   spec.RunID,
+	}
+}
+
+// withDefaults returns a copy of env with HOME added if it is missing.
+func withDefaults(env map[string]string) map[string]string {
+	out := make(map[string]string, len(env)+1)
+	for k, v := range env {
+		out[k] = v
+	}
+	if _, ok := out["HOME"]; !ok {
+		out["HOME"] = sandbox.DefaultHome
+	}
+	return out
+}
+
+func containerConfig(spec sandbox.Spec) *container.Config {
+	return &container.Config{
+		Image:  spec.Image,
+		Cmd:    []string{"sh", "-c", keepAlive},
+		User:   fmt.Sprintf("%d:%d", sandbox.SandboxUID, sandbox.SandboxGID),
+		Env:    envList(withDefaults(spec.Env)),
+		Labels: labels(spec),
+		// No WorkingDir: Docker would create /workspace owned by root.
+		// /workspace comes from the archive; Exec sets WorkingDir per command.
+	}
+}
+
+// hostConfig builds the isolation settings. The root filesystem is NOT
+// read-only: ReadonlyRootfs would block CopyToContainer and the Go build
+// cache in /tmp. Isolation from the host comes from: no mounts (the
+// workspace is copied, never bind-mounted), no network unless asked,
+// non-root user, all capabilities dropped, no-new-privileges, and process
+// and memory limits.
+func hostConfig(spec sandbox.Spec) *container.HostConfig {
+	init := true // reaps zombie processes
+	pids := int64(sandbox.PidsLimit)
+	hc := &container.HostConfig{
+		Init:        &init,
+		CapDrop:     []string{"ALL"},
+		SecurityOpt: []string{"no-new-privileges:true"},
+	}
+	hc.PidsLimit = &pids
+	if !spec.Network {
+		hc.NetworkMode = container.NetworkMode("none")
+	}
+	if spec.CPUs > 0 {
+		hc.NanoCPUs = int64(spec.CPUs * 1e9)
+	}
+	if spec.MemoryBytes > 0 {
+		hc.Memory = spec.MemoryBytes
+		hc.MemorySwap = spec.MemoryBytes // equal to Memory = no swap
+	}
+	return hc
 }
 
 // forceRemove removes a container even if ctx of the caller is already done.

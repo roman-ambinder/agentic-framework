@@ -24,6 +24,9 @@ func samplePayloads() map[string]*adlcv1.Event {
 			AgentVersion: "coder@1", Task: "fix bug",
 			Budget: &adlcv1.Budget{MaxSteps: 50, MaxWallClock: durationpb.New(10 * time.Minute)},
 		}}},
+		"run_resumed": {Payload: &adlcv1.Event_RunResumed{RunResumed: &adlcv1.RunResumed{
+			NextStep: 3, VerifiedCheckpointSeq: 9, AbandonedToolCalls: 1, Reason: "process stopped without run_completed",
+		}}},
 		"run_completed": {Payload: &adlcv1.Event_RunCompleted{RunCompleted: &adlcv1.RunCompleted{
 			StopReason: adlcv1.StopReason_STOP_REASON_BUDGET_EXHAUSTED, ExhaustedBudget: adlcv1.BudgetKind_BUDGET_KIND_STEPS,
 		}}},
@@ -160,5 +163,39 @@ func TestEnumZeroValuesAreUnspecified(t *testing.T) {
 		if zero == nil || !strings.HasSuffix(string(zero.Name()), "_UNSPECIFIED") {
 			t.Errorf("enum %s: zero value must be *_UNSPECIFIED", e.Name())
 		}
+	}
+}
+
+func TestPluginMessagesRoundTrip(t *testing.T) {
+	info := &adlcv1.ToolCallInfo{
+		Call:      &adlcv1.ToolCall{Id: "t1", Name: "fs__read_file", ArgumentsJson: `{"path":"main.go"}`},
+		RiskClass: adlcv1.RiskClass_RISK_CLASS_WRITE_EXTERNAL,
+		Server:    "fs",
+	}
+	tests := []struct {
+		name string
+		in   proto.Message
+		out  proto.Message
+	}{
+		{"pre_tool_request", &adlcv1.PreToolRequest{Info: info}, &adlcv1.PreToolRequest{}},
+		{"pre_tool_response", &adlcv1.PreToolResponse{Decision: adlcv1.Decision_DECISION_DENY, Reason: "no"}, &adlcv1.PreToolResponse{}},
+		{"post_tool_request", &adlcv1.PostToolRequest{
+			Info: info, IsError: true, Output: []byte{0x00, 0xff, 'x'}, ExitCode: -2,
+			Duration: durationpb.New(1500 * time.Millisecond),
+		}, &adlcv1.PostToolRequest{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b, err := proto.Marshal(tt.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := proto.Unmarshal(b, tt.out); err != nil {
+				t.Fatal(err)
+			}
+			if !proto.Equal(tt.in, tt.out) {
+				t.Errorf("round trip changed the message:\n in: %v\nout: %v", tt.in, tt.out)
+			}
+		})
 	}
 }

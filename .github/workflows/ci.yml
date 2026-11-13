@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, integration]
   pull_request:
 
 permissions:
@@ -41,6 +41,19 @@ jobs:
       - name: lint
         run: make lint
 
+  plugin-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: python hook integration test
+        run: make test-plugin-python
+
   docker:
     runs-on: ubuntu-latest
     steps:
@@ -50,6 +63,16 @@ jobs:
           go-version-file: go.mod
       - name: docker tests
         run: make test-docker
+
+  evals-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: seeded bugs behave
+        run: make evals-check
 
   # Fails a pull request that breaks compatibility of the contracts with its base branch.
   proto-breaking:
