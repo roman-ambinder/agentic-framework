@@ -29,10 +29,13 @@ type loop struct {
 
 	startSeq uint64    // seq of the current model_call_started
 	t0       time.Time // when the current model call began
+
+	startedAt time.Time       // when the run began; wall-clock budget counts from here
+	callCtx   context.Context // ctx plus the wall-clock deadline; used for model, policy and tool calls
 }
 
 func newLoop(ctx context.Context, cfg Config, deps Deps) *loop {
-	return &loop{ctx: ctx, cfg: cfg, deps: deps, r: newRecorder(ctx, deps.Log, cfg.RunID, cfg.AgentID)}
+	return &loop{ctx: ctx, callCtx: ctx, cfg: cfg, deps: deps, r: newRecorder(ctx, deps.Log, cfg.RunID, cfg.AgentID)}
 }
 
 // add records ev; a failure is a failure to use the event log.
@@ -46,9 +49,18 @@ func (l *loop) add(ev *adlcv1.Event) (uint64, error) {
 
 // finish records run_completed and keeps a copy of the final state.
 func (l *loop) finish(reason adlcv1.StopReason, result, detail string) error {
-	_, err := l.add(&adlcv1.Event{Payload: &adlcv1.Event_RunCompleted{RunCompleted: &adlcv1.RunCompleted{
-		StopReason: reason, Result: result, Detail: detail,
-	}}})
+	return l.finishWith(&adlcv1.RunCompleted{StopReason: reason, Result: result, Detail: detail})
+}
+
+// finishBudget stops the run because a budget limit was reached.
+func (l *loop) finishBudget(e *exhausted) error {
+	return l.finishWith(&adlcv1.RunCompleted{
+		StopReason: adlcv1.StopReason_STOP_REASON_BUDGET_EXHAUSTED, ExhaustedBudget: e.Kind, Detail: e.Detail,
+	})
+}
+
+func (l *loop) finishWith(rc *adlcv1.RunCompleted) error {
+	_, err := l.add(&adlcv1.Event{Payload: &adlcv1.Event_RunCompleted{RunCompleted: rc}})
 	if err != nil {
 		return err
 	}
@@ -58,6 +70,9 @@ func (l *loop) finish(reason adlcv1.StopReason, result, detail string) error {
 }
 
 func (l *loop) run() (*eventlog.RunState, error) {
+	l.startedAt = l.deps.Now()
+	cancel := l.startWallClock()
+	defer cancel()
 	if _, err := l.add(&adlcv1.Event{Payload: &adlcv1.Event_RunStarted{RunStarted: &adlcv1.RunStarted{
 		AgentVersion: l.cfg.AgentVersion, Task: l.cfg.Task, Budget: l.cfg.Budget,
 	}}}); err != nil {
@@ -65,15 +80,59 @@ func (l *loop) run() (*eventlog.RunState, error) {
 	}
 	l.loadTools()
 	for step := uint32(1); ; step++ {
-		// 0.5.2 adds the budget check here.
 		if l.ctx.Err() != nil {
 			err := l.finish(adlcv1.StopReason_STOP_REASON_CANCELLED, "", "")
+			return l.final, err
+		}
+		if e := beforeModelCall(l.cfg.Budget, l.usage()); e != nil {
+			err := l.finishBudget(e)
 			return l.final, err
 		}
 		if err := l.step(step); err != nil || l.final != nil {
 			return l.final, err
 		}
 	}
+}
+
+// usage returns what the run has spent, from the recorded events.
+func (l *loop) usage() usage {
+	u := l.r.state.Usage
+	out := usage{
+		Steps:     l.r.modelCalls,
+		Tokens:    u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens,
+		USDMicros: u.USDMicros,
+		ToolCalls: l.r.state.ToolCalls,
+	}
+	if l.cfg.Budget.GetMaxWallClock().AsDuration() > 0 {
+		out.Elapsed = l.deps.Now().Sub(l.startedAt)
+	}
+	return out
+}
+
+// startWallClock derives callCtx with the wall-clock deadline, if there is
+// one, and returns its cancel function. The remaining time is computed from
+// deps.Now and applied to the real clock, so a test clock does not matter.
+func (l *loop) startWallClock() context.CancelFunc {
+	limit := l.cfg.Budget.GetMaxWallClock().AsDuration()
+	if limit <= 0 {
+		return func() {}
+	}
+	var cancel context.CancelFunc
+	l.callCtx, cancel = context.WithTimeout(l.ctx, limit-l.deps.Now().Sub(l.startedAt))
+	return cancel
+}
+
+// stopForContext finishes the run when a call ended because its context is
+// done: CANCELLED if the caller cancelled, WALL_CLOCK if only the deadline
+// passed. It reports whether it finished the run.
+func (l *loop) stopForContext() (bool, error) {
+	switch {
+	case l.ctx.Err() != nil:
+		return true, l.finish(adlcv1.StopReason_STOP_REASON_CANCELLED, "", "")
+	case l.callCtx.Err() != nil:
+		return true, l.finishBudget(wallClockReached(l.cfg.Budget.GetMaxWallClock().AsDuration()))
+	}
+	return false, nil
 }
 
 func (l *loop) loadTools() {
@@ -124,12 +183,12 @@ func (l *loop) callModel(req *model.Request, callID string, step uint32) (*model
 	}
 	l.startSeq = startSeq
 	l.t0 = l.deps.Now()
-	resp, err := l.deps.Model.Generate(l.ctx, req)
+	resp, err := l.deps.Model.Generate(l.callCtx, req)
 	if err == nil {
 		return resp, nil
 	}
-	if l.ctx.Err() != nil {
-		return nil, l.finish(adlcv1.StopReason_STOP_REASON_CANCELLED, "", "")
+	if stopped, err2 := l.stopForContext(); stopped {
+		return nil, err2
 	}
 	class, status := adlcv1.ErrorClass_ERROR_CLASS_INTERNAL, 0
 	var me *model.Error
@@ -198,6 +257,9 @@ func (l *loop) runToolCall(call model.ToolCall) error {
 	if l.ctx.Err() != nil {
 		return l.finish(adlcv1.StopReason_STOP_REASON_CANCELLED, "", "")
 	}
+	if e := beforeToolCall(l.cfg.Budget, l.usage()); e != nil {
+		return l.finishBudget(e)
+	}
 	tool, known := l.byName[call.Name]
 	reqSeq, err := l.add(&adlcv1.Event{Payload: &adlcv1.Event_ToolCallRequested{ToolCallRequested: &adlcv1.ToolCallRequested{
 		Call:      &adlcv1.ToolCall{Id: call.ID, Name: call.Name, ArgumentsJson: string(call.Arguments)},
@@ -241,7 +303,7 @@ func (l *loop) unknownToolMessage(name string) string {
 // authorize asks the policy and records the decision. It returns true when
 // the call must not run (the run has been finished).
 func (l *loop) authorize(call model.ToolCall, tool toolrouter.Tool, reqSeq uint64) (bool, error) {
-	dec, err := l.deps.Policy.Authorize(l.ctx, policy.Request{
+	dec, err := l.deps.Policy.Authorize(l.callCtx, policy.Request{
 		AgentID: l.cfg.AgentID, Tool: call.Name, Risk: tool.Risk, ArgumentsJSON: string(call.Arguments),
 	})
 	if err != nil {
@@ -271,8 +333,8 @@ func (l *loop) authorize(call model.ToolCall, tool toolrouter.Tool, reqSeq uint6
 }
 
 func (l *loop) policyError(err error) error {
-	if l.ctx.Err() != nil {
-		return l.finish(adlcv1.StopReason_STOP_REASON_CANCELLED, "", "")
+	if stopped, err2 := l.stopForContext(); stopped {
+		return err2
 	}
 	if _, err2 := l.add(&adlcv1.Event{Payload: &adlcv1.Event_ErrorOccurred{ErrorOccurred: &adlcv1.ErrorOccurred{
 		ErrorClass: adlcv1.ErrorClass_ERROR_CLASS_POLICY, Message: err.Error(), Component: "policy",
@@ -286,13 +348,13 @@ func (l *loop) policyError(err error) error {
 // sees; cancellation finishes the run instead (l.final is set).
 func (l *loop) callTool(call model.ToolCall) (toolrouter.Result, error) {
 	t0 := l.deps.Now()
-	res, err := l.deps.Tools.Call(l.ctx, call)
+	res, err := l.deps.Tools.Call(l.callCtx, call)
 	res.Duration = l.deps.Now().Sub(t0)
 	if err == nil {
 		return res, nil
 	}
-	if l.ctx.Err() != nil {
-		return res, l.finish(adlcv1.StopReason_STOP_REASON_CANCELLED, "", "")
+	if stopped, err2 := l.stopForContext(); stopped {
+		return res, err2
 	}
 	if _, err2 := l.add(&adlcv1.Event{Payload: &adlcv1.Event_ErrorOccurred{ErrorOccurred: &adlcv1.ErrorOccurred{
 		ErrorClass: adlcv1.ErrorClass_ERROR_CLASS_TOOL, Message: err.Error(), Component: "toolrouter",

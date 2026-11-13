@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	adlcv1 "github.com/roman-ambinder/agentic-framework/gen/go/adlc/v1"
 	"github.com/roman-ambinder/agentic-framework/internal/eventlog"
@@ -516,4 +519,164 @@ func TestRunCancelledAfterModelResponseRequestsNoTool(t *testing.T) {
 	events := assertFolds(t, store, "r1", state)
 	wantKinds(t, events, "run_started", "model_call_started", "model_call_completed", "run_completed")
 	wantStop(t, state, adlcv1.StopReason_STOP_REASON_CANCELLED, "")
+}
+
+const (
+	budgetSteps     = adlcv1.BudgetKind_BUDGET_KIND_STEPS
+	budgetTokens    = adlcv1.BudgetKind_BUDGET_KIND_TOKENS
+	budgetCost      = adlcv1.BudgetKind_BUDGET_KIND_COST
+	budgetToolCalls = adlcv1.BudgetKind_BUDGET_KIND_TOOL_CALLS
+	budgetWall      = adlcv1.BudgetKind_BUDGET_KIND_WALL_CLOCK
+)
+
+func wantBudgetStop(t *testing.T, st *eventlog.RunState, kind adlcv1.BudgetKind, detail string) {
+	t.Helper()
+	wantStop(t, st, adlcv1.StopReason_STOP_REASON_BUDGET_EXHAUSTED, detail)
+	if st.ExhaustedBudget != kind {
+		t.Fatalf("exhausted budget = %s, want %s", st.ExhaustedBudget, kind)
+	}
+}
+
+func countModelCalls(evs []*adlcv1.Event) int {
+	return len(pick(evs, (*adlcv1.Event).GetModelCallCompleted))
+}
+
+// toolTurns returns n turns that each call fs__read_file once.
+func toolTurns(n int, usage model.Usage) []model.FakeTurn {
+	turns := make([]model.FakeTurn, n)
+	for i := range turns {
+		turns[i] = toolTurn(readCall(fmt.Sprintf("t%d", i+1), "a"))
+		turns[i].Response.Usage = usage
+	}
+	return turns
+}
+
+func TestRunStopsAtMaxSteps(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Budget = &adlcv1.Budget{MaxSteps: 2}
+	r := runHarness(t, context.Background(), cfg, defaultDeps(t), toolTurns(5, model.Usage{})...)
+	if n := countModelCalls(r.events); n != 2 {
+		t.Fatalf("%d model calls, want 2", n)
+	}
+	wantBudgetStop(t, r.state, budgetSteps, "max_steps 2 reached")
+}
+
+func TestRunStopsAtMaxTokens(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Budget = &adlcv1.Budget{MaxTokens: 100}
+	r := runHarness(t, context.Background(), cfg, defaultDeps(t),
+		toolTurns(5, model.Usage{InputTokens: 40, OutputTokens: 20})...)
+	if n := countModelCalls(r.events); n != 2 {
+		t.Fatalf("%d model calls, want 2", n)
+	}
+	wantBudgetStop(t, r.state, budgetTokens, "max_tokens 100 reached (used 120)")
+}
+
+func TestRunStopsAtMaxCost(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Price = model.Price{InputPerMTok: 6_000_000}
+	cfg.Budget = &adlcv1.Budget{MaxUsdMicros: 10}
+	r := runHarness(t, context.Background(), cfg, defaultDeps(t), toolTurns(5, model.Usage{InputTokens: 1})...)
+	if n := countModelCalls(r.events); n != 2 {
+		t.Fatalf("%d model calls, want 2", n)
+	}
+	wantBudgetStop(t, r.state, budgetCost, "max_usd_micros 10 reached (used 12)")
+}
+
+func TestRunStopsAtMaxToolCalls(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Budget = &adlcv1.Budget{MaxToolCalls: 2}
+	r := runHarness(t, context.Background(), cfg, defaultDeps(t),
+		toolTurn(readCall("t1", "a"), readCall("t2", "b"), readCall("t3", "c")), textTurn("unused"))
+	if n := len(pick(r.events, (*adlcv1.Event).GetToolCallRequested)); n != 2 {
+		t.Fatalf("%d tool calls requested, want 2", n)
+	}
+	wantBudgetStop(t, r.state, budgetToolCalls, "max_tool_calls 2 reached")
+}
+
+// stepClock is a clock the test moves by hand.
+type stepClock struct{ t time.Time }
+
+func (c *stepClock) Now() time.Time { return c.t }
+
+func TestRunStopsAtWallClockBeforeCall(t *testing.T) {
+	clock := &stepClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	slow := funcTool("x__slow", adlcv1.RiskClass_RISK_CLASS_READ, func(context.Context, json.RawMessage) (toolrouter.Result, error) {
+		clock.t = clock.t.Add(time.Minute)
+		return toolrouter.Result{Output: []byte("ok")}, nil
+	})
+	cfg := baseConfig()
+	cfg.Budget = &adlcv1.Budget{MaxWallClock: durationpb.New(90 * time.Second)}
+	deps := Deps{Tools: staticTools(t, slow), Policy: policy.AllowAll{}, Now: clock.Now}
+	call := model.ToolCall{Name: "x__slow"}
+	r := runHarness(t, context.Background(), cfg, deps,
+		toolTurn(call), toolTurn(call), toolTurn(call), textTurn("unused"))
+	if n := countModelCalls(r.events); n != 2 {
+		t.Fatalf("%d model calls, want 2", n)
+	}
+	wantBudgetStop(t, r.state, budgetWall, "max_wall_clock 1m30s reached")
+}
+
+// blockingTool blocks until its context ends. onStart runs first if set.
+func blockingTool(onStart func()) toolrouter.StaticTool {
+	return funcTool("x__block", adlcv1.RiskClass_RISK_CLASS_READ, func(ctx context.Context, _ json.RawMessage) (toolrouter.Result, error) {
+		if onStart != nil {
+			onStart()
+		}
+		<-ctx.Done()
+		return toolrouter.Result{}, ctx.Err()
+	})
+}
+
+func TestRunWallClockInterruptsTool(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Budget = &adlcv1.Budget{MaxWallClock: durationpb.New(50 * time.Millisecond)}
+	deps := Deps{Tools: staticTools(t, blockingTool(nil)), Policy: policy.AllowAll{}}
+	start := time.Now()
+	r := runHarness(t, context.Background(), cfg, deps, toolTurn(model.ToolCall{ID: "t1", Name: "x__block"}))
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("run took longer than 2s")
+	}
+	wantBudgetStop(t, r.state, budgetWall, "max_wall_clock 50ms reached")
+}
+
+// blockingModel blocks in Generate until its context ends.
+type blockingModel struct{ *model.Fake }
+
+func (blockingModel) Generate(ctx context.Context, _ *model.Request) (*model.Response, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestRunWallClockInterruptsModelCall(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Budget = &adlcv1.Budget{MaxWallClock: durationpb.New(50 * time.Millisecond)}
+	store := newLog(t)
+	deps := defaultDeps(t)
+	deps.Log, deps.Model = store, blockingModel{model.NewFake()}
+	state, err := Run(context.Background(), cfg, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFolds(t, store, "r1", state)
+	wantBudgetStop(t, state, budgetWall, "max_wall_clock 50ms reached")
+}
+
+func TestRunCallerCancelIsNotBudget(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := baseConfig()
+	cfg.Budget = &adlcv1.Budget{MaxWallClock: durationpb.New(time.Hour)}
+	deps := Deps{Tools: staticTools(t, blockingTool(cancel)), Policy: policy.AllowAll{}}
+	r := runHarness(t, ctx, cfg, deps, toolTurn(model.ToolCall{ID: "t1", Name: "x__block"}))
+	wantStop(t, r.state, adlcv1.StopReason_STOP_REASON_CANCELLED, "")
+	if r.state.ExhaustedBudget != adlcv1.BudgetKind_BUDGET_KIND_UNSPECIFIED {
+		t.Fatalf("exhausted budget = %s", r.state.ExhaustedBudget)
+	}
+}
+
+func TestRunNoBudget(t *testing.T) {
+	r := runHarness(t, context.Background(), baseConfig(), defaultDeps(t),
+		toolTurn(readCall("t1", "a")), toolTurn(readCall("t2", "b")), textTurn("done"))
+	wantStop(t, r.state, stopCompleted, "")
 }
