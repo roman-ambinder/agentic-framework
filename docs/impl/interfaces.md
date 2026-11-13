@@ -680,6 +680,7 @@ not set`), and the expanded value must be a valid decimal amount. Prices depend
 on the model the user picks, so agent files in `agents/` use this form.
 
 Task 1.3 adds `model.fallbacks` and `(*Agent).Prices() map[string]model.Price`.
+A fallback must not set `max_tokens` or `effort` (validation rejects them): the harness sends the primary's values and the router passes them through.
 
 CLI wiring (task 0.9.2, `internal/cli/wiring.go`, unexported, shared by
 `adlc run`, `adlc resume` (1.7) and `adlc eval` (1.8)):

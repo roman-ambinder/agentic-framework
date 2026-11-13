@@ -429,6 +429,7 @@ func TestRunInvalidConfig(t *testing.T) {
 		{"model", func(_ *Config, d *Deps) { d.Model = nil }, "harness: deps: model is nil"},
 		{"tools", func(_ *Config, d *Deps) { d.Tools = nil }, "harness: deps: tools is nil"},
 		{"policy", func(_ *Config, d *Deps) { d.Policy = nil }, "harness: deps: policy is nil"},
+		{"low water ratio", func(c *Config, _ *Deps) { c.Context.LowWaterRatio = 1.5 }, "harness: config: contextmgr: LowWaterRatio 1.5 must be in (0, 1]"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

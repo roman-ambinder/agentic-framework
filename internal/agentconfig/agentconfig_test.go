@@ -277,7 +277,7 @@ func TestFallbacksConfig(t *testing.T) {
 			t.Fatalf("fallbacks = %+v, want one", a.Model.Fallbacks)
 		}
 		f := a.Model.Fallbacks[0]
-		if f.Provider != "openai" || f.Name != "fallback-1" || f.MaxTokens != DefaultMaxTokens {
+		if f.Provider != "openai" || f.Name != "fallback-1" || f.MaxTokens != 0 {
 			t.Errorf("fallback = %+v", f)
 		}
 	})
@@ -288,6 +288,8 @@ func TestFallbacksConfig(t *testing.T) {
 		{"same as primary", strings.Replace(strings.Replace(fallbackYAML, "provider: openai", "provider: anthropic", 1), "${ADLC_TEST_FALLBACK}", "${ADLC_TEST_MODEL}", 1), `model.fallbacks[0]: repeats the primary provider and name`},
 		{"unknown provider", strings.Replace(fallbackYAML, "provider: openai", "provider: nope", 1), `model.fallbacks[0].provider: must be one of fake, anthropic, openai, got "nope"`},
 		{"nested fallbacks", strings.Replace(fallbackYAML, "      pricing:", "      fallbacks: [{provider: openai, name: x}]\n      pricing:", 1), `model.fallbacks[0].fallbacks: not allowed`},
+		{"max_tokens on fallback", strings.Replace(fallbackYAML, "      pricing:", "      max_tokens: 100\n      pricing:", 1), `model.fallbacks[0].max_tokens: not supported on fallbacks (the primary's value is used)`},
+		{"effort on fallback", strings.Replace(fallbackYAML, "      pricing:", "      effort: high\n      pricing:", 1), `model.fallbacks[0].effort: not supported on fallbacks (the primary's value is used)`},
 		{"bad pricing", strings.Replace(fallbackYAML, `output_per_mtok: "2"`, `output_per_mtok: x`, 1), `model.fallbacks[0].pricing.output_per_mtok: "x" is not a decimal amount`},
 	}
 	for _, tt := range tests {

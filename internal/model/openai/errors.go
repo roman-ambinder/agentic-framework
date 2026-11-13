@@ -3,6 +3,8 @@ package openai
 import (
 	"context"
 	"errors"
+	"net"
+	"net/url"
 
 	oai "github.com/openai/openai-go/v3"
 
@@ -21,5 +23,10 @@ func classify(ctx context.Context, err error) error {
 		class, retryable := model.ClassifyHTTP(apiErr.StatusCode)
 		return &model.Error{Class: class, HTTPStatus: apiErr.StatusCode, Retryable: retryable, Err: err}
 	}
-	return &model.Error{Class: adlcv1.ErrorClass_ERROR_CLASS_TIMEOUT, Retryable: true, Err: err}
+	var netErr net.Error
+	var urlErr *url.Error
+	if errors.As(err, &netErr) || errors.As(err, &urlErr) {
+		return &model.Error{Class: adlcv1.ErrorClass_ERROR_CLASS_TIMEOUT, Retryable: true, Err: err}
+	}
+	return &model.Error{Class: adlcv1.ErrorClass_ERROR_CLASS_MODEL, Err: err}
 }

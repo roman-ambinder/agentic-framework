@@ -1,7 +1,7 @@
 name: evalagent
 version: 1
 model:
-  provider: fake
-  name: m
+  provider: anthropic
+  name: ${ADLC_ANTHROPIC_MODEL}
 policy:
   default: deny
