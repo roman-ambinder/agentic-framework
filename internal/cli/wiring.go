@@ -11,6 +11,7 @@ import (
 	"github.com/roman-ambinder/agentic-framework/internal/model"
 	"github.com/roman-ambinder/agentic-framework/internal/model/anthropic"
 	"github.com/roman-ambinder/agentic-framework/internal/model/openai"
+	modelrouter "github.com/roman-ambinder/agentic-framework/internal/model/router"
 	"github.com/roman-ambinder/agentic-framework/internal/toolrouter"
 	"github.com/roman-ambinder/agentic-framework/internal/toolrouter/mcprouter"
 )
@@ -43,9 +44,34 @@ func buildRun(ctx context.Context, a *agentconfig.Agent, o runOptions, runID str
 	return cfg, deps, router.Close, nil
 }
 
-// buildModel picks the adapter from a.Model.Provider.
+// buildModel picks the adapter from a.Model.Provider. With fallbacks it
+// returns a router over the primary and the fallbacks, in config order.
 func buildModel(a *agentconfig.Agent, fakeScript string) (model.Adapter, error) {
-	switch p := a.Model.Provider; p {
+	primary, err := buildAdapter(a.Model.Provider, fakeScript)
+	if err != nil {
+		return nil, err
+	}
+	if len(a.Model.Fallbacks) == 0 {
+		return primary, nil
+	}
+	cands := []modelrouter.Candidate{{Adapter: primary, Model: a.Model.Name}}
+	for _, f := range a.Model.Fallbacks {
+		ad, err := buildAdapter(f.Provider, fakeScript)
+		if err != nil {
+			return nil, err
+		}
+		cands = append(cands, modelrouter.Candidate{Adapter: ad, Model: f.Name})
+	}
+	r, err := modelrouter.New(cands...)
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// buildAdapter returns the adapter for one provider name.
+func buildAdapter(provider, fakeScript string) (model.Adapter, error) {
+	switch provider {
 	case "fake":
 		if fakeScript == "" {
 			return nil, errors.New("run: provider fake needs --fake-script")
@@ -66,7 +92,7 @@ func buildModel(a *agentconfig.Agent, fakeScript string) (model.Adapter, error) 
 		}
 		return openai.New(openai.Config{})
 	default:
-		return nil, fmt.Errorf("run: unsupported provider %q", p)
+		return nil, fmt.Errorf("run: unsupported provider %q", provider)
 	}
 }
 
@@ -114,6 +140,7 @@ func harnessConfig(a *agentconfig.Agent, runID, task string) harness.Config {
 		Effort:             a.Model.Effort,
 		Budget:             a.BudgetProto(),
 		Price:              a.Price(),
+		Prices:             a.Prices(),
 		MaxToolOutputBytes: a.MaxToolOutputBytes,
 		Context:            a.ContextBudget(),
 	}

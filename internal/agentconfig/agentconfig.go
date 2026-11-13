@@ -42,6 +42,9 @@ type Model struct {
 	MaxTokens int     `yaml:"max_tokens"`
 	Effort    string  `yaml:"effort"`
 	Pricing   Pricing `yaml:"pricing"`
+	// Fallbacks are tried in order when the primary fails with a retryable
+	// error (task 1.3). A fallback has no fallbacks of its own.
+	Fallbacks []Model `yaml:"fallbacks"`
 }
 
 // Pricing holds USD per million tokens as decimal strings.
@@ -139,22 +142,38 @@ func (a *Agent) applyDefaults() {
 	if a.Model.Provider == "fake" && a.Model.Name == "" {
 		a.Model.Name = DefaultFakeModel
 	}
+	for i := range a.Model.Fallbacks {
+		if a.Model.Fallbacks[i].MaxTokens == 0 {
+			a.Model.Fallbacks[i].MaxTokens = DefaultMaxTokens
+		}
+	}
 }
 
 var envNameRE = regexp.MustCompile(`^\$\{([A-Z_][A-Z0-9_]*)\}$`)
 
-// resolve expands model.name from the environment and loads system_file.
+// resolve expands model names from the environment and loads system_file.
 func (a *Agent) resolve() error {
 	var p problems
-	if m := envNameRE.FindStringSubmatch(a.Model.Name); m != nil {
-		if v, ok := os.LookupEnv(m[1]); !ok || v == "" {
-			p.add("model.name", "environment variable %s is not set", m[1])
-		} else {
-			a.Model.Name = v
-		}
+	expandName(&p, "model.name", &a.Model.Name)
+	for i := range a.Model.Fallbacks {
+		expandName(&p, fmt.Sprintf("model.fallbacks[%d].name", i), &a.Model.Fallbacks[i].Name)
 	}
 	a.resolveSystemFile(&p)
 	return errors.Join(p...)
+}
+
+// expandName replaces a name that is exactly ${VAR} with the variable's value.
+func expandName(p *problems, path string, name *string) {
+	m := envNameRE.FindStringSubmatch(*name)
+	if m == nil {
+		return
+	}
+	v, ok := os.LookupEnv(m[1])
+	if !ok || v == "" {
+		p.add(path, "environment variable %s is not set", m[1])
+		return
+	}
+	*name = v
 }
 
 func (a *Agent) resolveSystemFile(p *problems) {

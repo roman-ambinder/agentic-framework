@@ -28,7 +28,24 @@ func (a *Agent) AgentID() string { return fmt.Sprintf("%s@%d", a.Name, a.Version
 // Price returns the model prices in micro-USD per million tokens.
 // Call only after Validate succeeded.
 func (a *Agent) Price() model.Price {
-	p := a.Model.Pricing
+	return priceOf(a.Model.Pricing)
+}
+
+// Prices returns the price of the primary model and of every fallback, keyed
+// by model name. If two candidates share a name, the primary's price wins.
+// Call only after Validate succeeded.
+func (a *Agent) Prices() map[string]model.Price {
+	out := map[string]model.Price{a.Model.Name: a.Price()}
+	for _, f := range a.Model.Fallbacks {
+		if _, ok := out[f.Name]; !ok {
+			out[f.Name] = priceOf(f.Pricing)
+		}
+	}
+	return out
+}
+
+// priceOf converts decimal USD per million tokens to micro-USD.
+func priceOf(p Pricing) model.Price {
 	in, _ := ParseMicroUSD(p.InputPerMTok)
 	out, _ := ParseMicroUSD(p.OutputPerMTok)
 	cr, _ := ParseMicroUSD(p.CacheReadPerMTok)

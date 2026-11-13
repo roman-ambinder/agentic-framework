@@ -39,7 +39,8 @@ type Config struct {
 	Effort             string
 	Budget             *adlcv1.Budget
 	Price              model.Price
-	MaxToolOutputBytes int // 0 = toolrouter.DefaultMaxModelBytes
+	Prices             map[string]model.Price // per model id (task 1.3); Price when absent
+	MaxToolOutputBytes int                    // 0 = toolrouter.DefaultMaxModelBytes
 	Retry              RetryPolicy
 	Hooks              []Hook
 	// Context limits the size of each model request (task 1.6.1).

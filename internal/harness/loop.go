@@ -281,11 +281,20 @@ func (l *loop) recordFailure(genErr error, callID string, willRetry bool) error 
 	return err
 }
 
+// priceFor returns the price of model id m: Config.Prices[m] if set, else Config.Price.
+func (l *loop) priceFor(m string) model.Price {
+	if p, ok := l.cfg.Prices[m]; ok {
+		return p
+	}
+	return l.cfg.Price
+}
+
 // recordResponse writes model_call_completed with the cost of the call.
 func (l *loop) recordResponse(callID string, resp *model.Response, calls []model.ToolCall) error {
 	done := &adlcv1.ModelCallCompleted{
 		CallId: callID, FinishReason: resp.Finish, ProviderFinishReason: resp.ProviderFinish,
 		Text: resp.Message.Text(), Latency: durationpb.New(l.deps.Now().Sub(l.t0)),
+		Provider: resp.Provider, Model: resp.Model,
 	}
 	for _, c := range calls {
 		done.ToolCalls = append(done.ToolCalls, &adlcv1.ToolCall{Id: c.ID, Name: c.Name, ArgumentsJson: string(c.Arguments)})
@@ -303,7 +312,7 @@ func (l *loop) recordResponse(callID string, resp *model.Response, calls []model
 		Cost: &adlcv1.Cost{
 			InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens,
 			CacheReadTokens: resp.Usage.CacheReadTokens, CacheWriteTokens: resp.Usage.CacheWriteTokens,
-			UsdMicros: l.cfg.Price.Cost(resp.Usage),
+			UsdMicros: l.priceFor(resp.Model).Cost(resp.Usage),
 		},
 	})
 	return err

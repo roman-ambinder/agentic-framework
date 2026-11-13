@@ -1214,6 +1214,10 @@ type ModelCallCompleted struct {
 	// call (e.g. thinking blocks). The harness stores but never interprets it.
 	ProviderBlobs []*ProviderBlob      `protobuf:"bytes,6,rep,name=provider_blobs,json=providerBlobs,proto3" json:"provider_blobs,omitempty"`
 	Latency       *durationpb.Duration `protobuf:"bytes,7,opt,name=latency,proto3" json:"latency,omitempty"`
+	// Provider and model that actually answered (differs from
+	// model_call_started when a router fell back).
+	Provider      string `protobuf:"bytes,8,opt,name=provider,proto3" json:"provider,omitempty"`
+	Model         string `protobuf:"bytes,9,opt,name=model,proto3" json:"model,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1295,6 +1299,20 @@ func (x *ModelCallCompleted) GetLatency() *durationpb.Duration {
 		return x.Latency
 	}
 	return nil
+}
+
+func (x *ModelCallCompleted) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *ModelCallCompleted) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
 }
 
 type ModelCallFailed struct {
@@ -2060,7 +2078,7 @@ const file_adlc_v1_events_proto_rawDesc = "" +
 	"\x04step\x18\x02 \x01(\rR\x04step\x12\x1a\n" +
 	"\bprovider\x18\x03 \x01(\tR\bprovider\x12\x14\n" +
 	"\x05model\x18\x04 \x01(\tR\x05model\x12\x18\n" +
-	"\aattempt\x18\x05 \x01(\rR\aattempt\"\xd8\x02\n" +
+	"\aattempt\x18\x05 \x01(\rR\aattempt\"\x8a\x03\n" +
 	"\x12ModelCallCompleted\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x12:\n" +
 	"\rfinish_reason\x18\x02 \x01(\x0e2\x15.adlc.v1.FinishReasonR\ffinishReason\x124\n" +
@@ -2069,7 +2087,9 @@ const file_adlc_v1_events_proto_rawDesc = "" +
 	"\n" +
 	"tool_calls\x18\x05 \x03(\v2\x11.adlc.v1.ToolCallR\ttoolCalls\x12<\n" +
 	"\x0eprovider_blobs\x18\x06 \x03(\v2\x15.adlc.v1.ProviderBlobR\rproviderBlobs\x123\n" +
-	"\alatency\x18\a \x01(\v2\x19.google.protobuf.DurationR\alatency\"\xba\x01\n" +
+	"\alatency\x18\a \x01(\v2\x19.google.protobuf.DurationR\alatency\x12\x1a\n" +
+	"\bprovider\x18\b \x01(\tR\bprovider\x12\x14\n" +
+	"\x05model\x18\t \x01(\tR\x05model\"\xba\x01\n" +
 	"\x0fModelCallFailed\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x124\n" +
 	"\verror_class\x18\x02 \x01(\x0e2\x13.adlc.v1.ErrorClassR\n" +

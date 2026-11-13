@@ -52,7 +52,12 @@ func (f *Fake) Generate(ctx context.Context, req *Request) (*Response, error) {
 	if turn.Err != nil {
 		return nil, turn.Err
 	}
-	return copyResponse(turn.Response), nil
+	resp := copyResponse(turn.Response)
+	if resp != nil {
+		resp.Provider = f.Provider()
+		resp.Model = req.Model
+	}
+	return resp, nil
 }
 
 // CountTokens estimates ceil(bytes/4) over the request's text content. It
