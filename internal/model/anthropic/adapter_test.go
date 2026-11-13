@@ -374,7 +374,7 @@ func TestClassify(t *testing.T) {
 		{"408", 408, adlcv1.ErrorClass_ERROR_CLASS_MODEL, true},
 		{"400", 400, adlcv1.ErrorClass_ERROR_CLASS_MODEL, false},
 		{"401", 401, adlcv1.ErrorClass_ERROR_CLASS_MODEL, false},
-		{"501", 501, adlcv1.ErrorClass_ERROR_CLASS_MODEL, false},
+		{"501", 501, adlcv1.ErrorClass_ERROR_CLASS_MODEL, true}, // interfaces.md §2.1: any 5xx is retryable
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
