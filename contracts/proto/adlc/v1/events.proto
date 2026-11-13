@@ -89,6 +89,10 @@ message RunStarted {
   string task_id = 5;
   // Run this one was resumed from, if any.
   string resumed_from_run_id = 6;
+  // Run this one was forked from (adlc fork), if any.
+  string forked_from_run_id = 7;
+  // Step of forked_from_run_id whose checkpoint the fork copied up to.
+  uint32 forked_at_step = 8;
 }
 
 // RunResumed is written when a run that stopped without run_completed is

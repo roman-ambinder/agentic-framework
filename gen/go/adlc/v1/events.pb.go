@@ -991,8 +991,12 @@ type RunStarted struct {
 	TaskId     string `protobuf:"bytes,5,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
 	// Run this one was resumed from, if any.
 	ResumedFromRunId string `protobuf:"bytes,6,opt,name=resumed_from_run_id,json=resumedFromRunId,proto3" json:"resumed_from_run_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Run this one was forked from (adlc fork), if any.
+	ForkedFromRunId string `protobuf:"bytes,7,opt,name=forked_from_run_id,json=forkedFromRunId,proto3" json:"forked_from_run_id,omitempty"`
+	// Step of forked_from_run_id whose checkpoint the fork copied up to.
+	ForkedAtStep  uint32 `protobuf:"varint,8,opt,name=forked_at_step,json=forkedAtStep,proto3" json:"forked_at_step,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RunStarted) Reset() {
@@ -1065,6 +1069,20 @@ func (x *RunStarted) GetResumedFromRunId() string {
 		return x.ResumedFromRunId
 	}
 	return ""
+}
+
+func (x *RunStarted) GetForkedFromRunId() string {
+	if x != nil {
+		return x.ForkedFromRunId
+	}
+	return ""
+}
+
+func (x *RunStarted) GetForkedAtStep() uint32 {
+	if x != nil {
+		return x.ForkedAtStep
+	}
+	return 0
 }
 
 // RunResumed is written when a run that stopped without run_completed is
@@ -2149,7 +2167,7 @@ const file_adlc_v1_events_proto_rawDesc = "" +
 	"max_tokens\x18\x02 \x01(\x03R\tmaxTokens\x12?\n" +
 	"\x0emax_wall_clock\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\fmaxWallClock\x12$\n" +
 	"\x0emax_usd_micros\x18\x04 \x01(\x03R\fmaxUsdMicros\x12$\n" +
-	"\x0emax_tool_calls\x18\x05 \x01(\rR\fmaxToolCalls\"\xd7\x01\n" +
+	"\x0emax_tool_calls\x18\x05 \x01(\rR\fmaxToolCalls\"\xaa\x02\n" +
 	"\n" +
 	"RunStarted\x12#\n" +
 	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\x12\x12\n" +
@@ -2158,7 +2176,9 @@ const file_adlc_v1_events_proto_rawDesc = "" +
 	"\vworkflow_id\x18\x04 \x01(\tR\n" +
 	"workflowId\x12\x17\n" +
 	"\atask_id\x18\x05 \x01(\tR\x06taskId\x12-\n" +
-	"\x13resumed_from_run_id\x18\x06 \x01(\tR\x10resumedFromRunId\"\xab\x01\n" +
+	"\x13resumed_from_run_id\x18\x06 \x01(\tR\x10resumedFromRunId\x12+\n" +
+	"\x12forked_from_run_id\x18\a \x01(\tR\x0fforkedFromRunId\x12$\n" +
+	"\x0eforked_at_step\x18\b \x01(\rR\fforkedAtStep\"\xab\x01\n" +
 	"\n" +
 	"RunResumed\x12\x1b\n" +
 	"\tnext_step\x18\x01 \x01(\rR\bnextStep\x126\n" +
