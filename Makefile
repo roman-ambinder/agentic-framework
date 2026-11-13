@@ -16,8 +16,8 @@ LINT     := $(TOOL) golangci-lint
 # Baseline for the schema compatibility check: a git ref or a directory.
 AGAINST  ?= .git\#branch=main
 
-.PHONY: help build test test-race lint fmt tidy tidy-check ci clean \
-        proto proto-lint proto-check proto-breaking
+.PHONY: help build test test-race test-docker lint fmt tidy tidy-check ci clean \
+        proto proto-lint proto-check proto-breaking fixtures-test
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-15s %s\n", $$1, $$2}'
@@ -30,6 +30,12 @@ test: ## Run unit tests
 
 test-race: ## Run unit tests with the race detector
 	go test -race ./...
+
+test-docker: ## Run tests that need a Docker daemon
+	go test -race -tags docker -count=1 ./internal/sandbox/...
+
+fixtures-test: ## Test the eval fixture repositories
+	cd evals/fixtures/ledger && go vet ./... && go test -count=1 ./...
 
 lint: ## Run golangci-lint
 	$(LINT) run ./...
@@ -63,7 +69,7 @@ proto-check: ## Fail if gen/go is out of date with contracts/proto
 proto-breaking: ## Fail on breaking schema changes vs AGAINST (default: main branch)
 	$(BUF) breaking --against '$(AGAINST)'
 
-ci: tidy-check proto-lint proto-check lint test-race build ## Everything CI runs (proto-breaking runs on PRs only)
+ci: tidy-check proto-lint proto-check lint test-race fixtures-test build ## Everything CI runs (proto-breaking runs on PRs only)
 
 clean: ## Remove build output
 	rm -rf bin

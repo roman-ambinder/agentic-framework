@@ -178,7 +178,8 @@ func (j *Journal) Reverse(id int, date time.Time) (Entry, error)
 // Save writes the journal as JSON: {"version":1,"entries":[...]} with dates as "2006-01-02"
 // and amounts as strings in money.String format.
 func (j *Journal) Save(w io.Writer) error
-// Load reads what Save wrote, re-validates every entry against reg, and rebuilds all internal
+// Load reads what Save wrote, re-validates every entry against reg (except the account-open
+// rule: history posted while an account was open must still load), and rebuilds all internal
 // state, including which entries have been reversed (from each entry's Reverses field).
 func Load(r io.Reader, reg *account.Registry) (*Journal, error)
 ```
@@ -315,7 +316,7 @@ exercise them**, otherwise a seeded bug would be caught by the visible suite:
 2. `String` of negative amounts with absolute value below 1.00 (e.g. -0.05).
 3. `csvField`/`WriteCSV` with memos containing commas (quotes and newlines may be tested).
 4. `Balance` with an entry dated exactly on `asOf` (test dates strictly before and strictly after only).
-5. `RateOn`/`Convert` on a date between two rate dates (test exact rate dates and "before first rate" only).
+5. `RateOn`/`Convert` on a date between two rate dates (test exact rate dates only: E.2 bug 5 changes the before-first-rate behaviour, so visible tests must not cover it).
 6. `importcsv` amounts in parentheses.
 7. `TrialBalance` with more than one currency.
 8. `Statement` opening balance for credit-normal accounts (test statements only for Asset accounts, or Liability
@@ -358,7 +359,7 @@ Per package, table-driven, named `Test<Func><Case>`, for example `TestParseRejec
 
 ```bash
 cd evals/fixtures/ledger && go vet ./... && go test -count=1 -cover ./...
-cd ../../.. && go list ./... | grep -c ledger    # prints 0
+cd ../../.. && go list ./... | grep -c ledger    # prints 0 (and exits 1, which is expected)
 make fixtures-test
 make ci
 ```
