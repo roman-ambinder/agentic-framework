@@ -582,7 +582,17 @@ var (
 )
 // AbandonedOutput / NotRunOutput: tool results Resume writes for calls that
 // were running, or never started, when the run stopped (exact text: brief 1.7).
+const AbandonedOutput = "abandoned: the run stopped while this tool call was running; it may or may not have taken effect. Check before repeating it."
+const NotRunOutput = "not run: the run stopped before this tool call started. Call it again if it is still needed."
 ```
+
+`Resume` ignores `cfg.Task` (the task is in `run_started`), only appends events
+(first `run_resumed{next_step, verified_checkpoint_seq, abandoned_tool_calls,
+reason}`, then the recovery events), and continues the same loop as `Run`.
+It refuses finished runs (`ErrRunFinished`), paused runs (`ErrRunPaused`), a
+different `AgentVersion` (`ErrAgentMismatch`) and a last checkpoint whose digest
+does not match the log (`ErrCheckpointMismatch`); an unknown run wraps
+`eventlog.ErrRunNotFound`. `run_resumed` does not change `RunState`.
 
 Checkpoint digest: `checkpoint.state_digest` = `RunState.Digest()` of the
 state folded from all events before the checkpoint (seq < checkpoint seq).
@@ -612,6 +622,8 @@ checkpoint           {step, state_digest}                                       
 ```
 
 The run starts with `run_started` and ends with exactly one `run_completed`.
+A run continued by `Resume` has one `run_resumed` (task 1.7) after the point
+where the process stopped; it creates no message in `Transcript`.
 
 ### §6.2 Stop reasons
 

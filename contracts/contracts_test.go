@@ -24,6 +24,9 @@ func samplePayloads() map[string]*adlcv1.Event {
 			AgentVersion: "coder@1", Task: "fix bug",
 			Budget: &adlcv1.Budget{MaxSteps: 50, MaxWallClock: durationpb.New(10 * time.Minute)},
 		}}},
+		"run_resumed": {Payload: &adlcv1.Event_RunResumed{RunResumed: &adlcv1.RunResumed{
+			NextStep: 3, VerifiedCheckpointSeq: 9, AbandonedToolCalls: 1, Reason: "process stopped without run_completed",
+		}}},
 		"run_completed": {Payload: &adlcv1.Event_RunCompleted{RunCompleted: &adlcv1.RunCompleted{
 			StopReason: adlcv1.StopReason_STOP_REASON_BUDGET_EXHAUSTED, ExhaustedBudget: adlcv1.BudgetKind_BUDGET_KIND_STEPS,
 		}}},

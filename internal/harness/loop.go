@@ -86,7 +86,14 @@ func (l *loop) run() (*eventlog.RunState, error) {
 		return nil, err
 	}
 	l.loadTools()
-	for step := uint32(1); ; step++ {
+	return l.steps(1)
+}
+
+// steps runs model steps from firstStep until the run stops. Run and Resume
+// share it; the caller has already set startedAt, started the wall clock and
+// loaded the tools.
+func (l *loop) steps(firstStep uint32) (*eventlog.RunState, error) {
+	for step := firstStep; ; step++ {
 		if l.ctx.Err() != nil {
 			err := l.finish(adlcv1.StopReason_STOP_REASON_CANCELLED, "", "")
 			return l.final, err
