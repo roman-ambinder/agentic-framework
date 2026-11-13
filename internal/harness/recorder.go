@@ -24,6 +24,20 @@ func newRecorder(parent context.Context, log Log, runID, agentID string) *record
 	return &recorder{ctx: context.WithoutCancel(parent), log: log, runID: runID, agentID: agentID}
 }
 
+// newRecorderFrom returns a recorder that already holds events (as read from
+// the log) and the state folded from them.
+func newRecorderFrom(ctx context.Context, log Log, runID, agentID string, events []*adlcv1.Event, state eventlog.RunState) *recorder {
+	r := newRecorder(ctx, log, runID, agentID)
+	r.events = events
+	r.state = state
+	for _, ev := range events {
+		if ev.GetModelCallCompleted() != nil {
+			r.modelCalls++
+		}
+	}
+	return r
+}
+
 // add sets RunId and AgentId on ev, appends it to the log, applies the stored
 // event to r.state and returns its seq. Any error is returned as is. A failure
 // from state.Apply means the harness wrote an invalid sequence (a bug).

@@ -213,3 +213,16 @@ func TestTranscriptInsertsBlobsInAscendingIndexOrder(t *testing.T) {
 		t.Fatalf("order = %v, want %v", order, want)
 	}
 }
+
+func TestTranscriptIgnoresRunResumed(t *testing.T) {
+	got, err := Transcript([]*adlcv1.Event{
+		evStarted(),
+		{Payload: &adlcv1.Event_RunResumed{RunResumed: &adlcv1.RunResumed{NextStep: 1}}},
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d messages, want only the task", len(got))
+	}
+}

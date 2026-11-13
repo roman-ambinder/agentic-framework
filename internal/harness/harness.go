@@ -63,6 +63,9 @@ type Deps struct {
 // a stop reason recorded in the log.
 func Run(ctx context.Context, cfg Config, deps Deps) (*eventlog.RunState, error) {
 	cfg, deps = applyDefaults(cfg, deps)
+	if cfg.Task == "" {
+		return nil, errors.New("harness: config: task is empty")
+	}
 	if err := validate(cfg, deps); err != nil {
 		return nil, err
 	}
@@ -99,8 +102,6 @@ func validate(cfg Config, deps Deps) error {
 	switch {
 	case cfg.RunID == "":
 		return errors.New("harness: config: run id is empty")
-	case cfg.Task == "":
-		return errors.New("harness: config: task is empty")
 	case deps.Log == nil:
 		return errors.New("harness: deps: log is nil")
 	case deps.Model == nil:
