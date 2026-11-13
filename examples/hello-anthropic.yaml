@@ -4,6 +4,13 @@ model:
   provider: anthropic
   name: "${ADLC_ANTHROPIC_MODEL}"
   max_tokens: 2048
+  # USD per million tokens, as decimal strings. Set these for the model you
+  # chose in ADLC_ANTHROPIC_MODEL (see docs/impl/gate-g0.md).
+  pricing:
+    input_per_mtok: ${ADLC_ANTHROPIC_PRICE_INPUT}
+    output_per_mtok: ${ADLC_ANTHROPIC_PRICE_OUTPUT}
+    cache_read_per_mtok: ${ADLC_ANTHROPIC_PRICE_CACHE_READ}
+    cache_write_per_mtok: ${ADLC_ANTHROPIC_PRICE_CACHE_WRITE}
 system: |
   You answer questions about the files in the workspace. Use the fs tools.
 tools:

@@ -251,6 +251,7 @@ func TestExampleFilesLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("ADLC_ANTHROPIC_MODEL", "test-model")
+	setTestAnthropicPrices(t)
 	a, err := agentconfig.Load("../../examples/hello-anthropic.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -266,6 +267,7 @@ func TestExampleFilesLoad(t *testing.T) {
 
 func TestModelNameFlagReplacesUnsetVariable(t *testing.T) {
 	t.Setenv("ADLC_ANTHROPIC_MODEL", "")
+	setTestAnthropicPrices(t)
 	a, err := loadAgent(runOptions{agentPath: "../../examples/hello-anthropic.yaml", modelName: "cli-model"})
 	if err != nil {
 		t.Fatal(err)
@@ -275,5 +277,14 @@ func TestModelNameFlagReplacesUnsetVariable(t *testing.T) {
 	}
 	if _, err := loadAgent(runOptions{agentPath: "../../examples/hello-anthropic.yaml"}); err == nil {
 		t.Error("want error when variable unset and no --model-name")
+	}
+}
+
+// setTestAnthropicPrices sets the price variables that the Anthropic example
+// agent reads, with fake values.
+func setTestAnthropicPrices(t *testing.T) {
+	t.Helper()
+	for _, v := range []string{"INPUT", "OUTPUT", "CACHE_READ", "CACHE_WRITE"} {
+		t.Setenv("ADLC_ANTHROPIC_PRICE_"+v, "1.00")
 	}
 }
