@@ -1,0 +1,19 @@
+{
+  "turns": [
+    {
+      "text": "Let me read the file.",
+      "tool_calls": [
+        {"id": "t1", "name": "fs__read_file", "arguments": {"path": "README.md"}}
+      ],
+      "usage": {"input_tokens": 120, "output_tokens": 25}
+    },
+    {
+      "error": {"class": "rate_limit", "http_status": 429, "retryable": true, "message": "slow down"}
+    },
+    {
+      "text": "The README says hello.",
+      "finish": "end_turn",
+      "usage": {"input_tokens": 180, "output_tokens": 9, "cache_read_tokens": 100}
+    }
+  ]
+}
