@@ -1,0 +1,44 @@
+# Agent definition. Unknown fields are errors.
+name: hello                       # required; ^[a-z][a-z0-9-]{0,31}$
+version: 1                        # required; >= 1. Agent id is "<name>@<version>"
+model:
+  provider: anthropic             # required; one of: fake, anthropic, openai
+  name: example-model-id          # required unless provider is fake (default "fake-model");
+                                  # may be exactly "${VAR}": replaced by the environment variable VAR
+  max_tokens: 4096                # optional; default 4096; 1..1000000
+  effort: high                    # optional; "", low, medium, high, xhigh, max
+  pricing:                        # optional; USD per million tokens, decimal strings
+    input_per_mtok: "1.50"
+    output_per_mtok: "7.50"
+    cache_read_per_mtok: "0.15"
+    cache_write_per_mtok: "1.875"
+system: |
+  You are a careful assistant. Use the tools to answer.
+# system_file: prompt.md          # optional; instead of system: read the prompt from this file,
+                                  # relative to the agent file's directory. Not both.
+max_tool_output_bytes: 16384      # optional; default 16384; 1..10485760
+tools:                            # optional
+  - server: fs                    # required; ^[a-z][a-z0-9_]{0,15}$, no "__", unique
+    command: ["adlc", "tool", "fs", "--root", "./workspace"]  # required, non-empty
+    env: {}                       # optional
+    risk:                         # optional; tool name -> risk class
+      read_file: read
+      list_dir: read
+      write_file: write_local
+    default_risk: ""              # optional; risk class for unlisted tools
+budget:                           # optional; 0 or missing = no limit
+  max_steps: 20
+  max_tokens: 200000
+  max_wall_clock: 10m             # Go duration string
+  max_usd: "1.00"                 # decimal string
+  max_tool_calls: 50
+policy:
+  default: deny                   # required; allow, deny, needs_approval
+  rules:                          # optional; first match wins
+    - id: reads                   # required, unique
+      risk: read                  # optional; "" = any risk
+      tool: ""                    # optional; namespaced tool name; "" = any tool
+      decision: allow             # required
+    - id: local-writes
+      risk: write_local
+      decision: needs_approval

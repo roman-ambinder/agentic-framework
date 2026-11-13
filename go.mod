@@ -6,6 +6,7 @@ toolchain go1.26.11
 
 require (
 	github.com/containerd/errdefs v1.0.0
+	github.com/goccy/go-yaml v1.19.2
 	github.com/moby/moby/api v1.57.0
 	github.com/moby/moby/client v0.6.3
 	github.com/spf13/cobra v1.10.2
