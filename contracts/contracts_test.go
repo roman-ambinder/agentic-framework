@@ -162,3 +162,37 @@ func TestEnumZeroValuesAreUnspecified(t *testing.T) {
 		}
 	}
 }
+
+func TestPluginMessagesRoundTrip(t *testing.T) {
+	info := &adlcv1.ToolCallInfo{
+		Call:      &adlcv1.ToolCall{Id: "t1", Name: "fs__read_file", ArgumentsJson: `{"path":"main.go"}`},
+		RiskClass: adlcv1.RiskClass_RISK_CLASS_WRITE_EXTERNAL,
+		Server:    "fs",
+	}
+	tests := []struct {
+		name string
+		in   proto.Message
+		out  proto.Message
+	}{
+		{"pre_tool_request", &adlcv1.PreToolRequest{Info: info}, &adlcv1.PreToolRequest{}},
+		{"pre_tool_response", &adlcv1.PreToolResponse{Decision: adlcv1.Decision_DECISION_DENY, Reason: "no"}, &adlcv1.PreToolResponse{}},
+		{"post_tool_request", &adlcv1.PostToolRequest{
+			Info: info, IsError: true, Output: []byte{0x00, 0xff, 'x'}, ExitCode: -2,
+			Duration: durationpb.New(1500 * time.Millisecond),
+		}, &adlcv1.PostToolRequest{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b, err := proto.Marshal(tt.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := proto.Unmarshal(b, tt.out); err != nil {
+				t.Fatal(err)
+			}
+			if !proto.Equal(tt.in, tt.out) {
+				t.Errorf("round trip changed the message:\n in: %v\nout: %v", tt.in, tt.out)
+			}
+		})
+	}
+}

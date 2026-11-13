@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+// Out-of-process plugins. A plugin is a program that serves one of these
+// services on the Unix socket named by the ADLC_PLUGIN_SOCKET environment
+// variable. Compatibility rules are the same as for events.proto.
+package adlc.v1;
+
+import "adlc/v1/events.proto";
+import "google/protobuf/duration.proto";
+
+// HookService lets a plugin inspect tool calls before and after they run.
+service HookService {
+  // PreTool is called before a tool call runs. DECISION_DENY stops it;
+  // DECISION_UNSPECIFIED and DECISION_ALLOW let it continue. Any other
+  // decision is an error.
+  rpc PreTool(PreToolRequest) returns (PreToolResponse);
+  // PostTool is called after a tool call finished.
+  rpc PostTool(PostToolRequest) returns (PostToolResponse);
+}
+
+// ToolCallInfo describes one tool call: what the model asked for and which
+// tool (server, risk class) it maps to.
+message ToolCallInfo {
+  ToolCall call = 1;
+  RiskClass risk_class = 2;
+  string server = 3;
+}
+
+message PreToolRequest {
+  ToolCallInfo info = 1;
+}
+
+message PreToolResponse {
+  Decision decision = 1;
+  string reason = 2;
+}
+
+message PostToolRequest {
+  ToolCallInfo info = 1;
+  bool is_error = 2;
+  bytes output = 3;
+  int32 exit_code = 4;
+  google.protobuf.Duration duration = 5;
+}
+
+message PostToolResponse {}
