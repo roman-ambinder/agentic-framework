@@ -77,6 +77,9 @@ func loadAgents(paths []string) ([]*agentconfig.Agent, error) {
 		if err != nil {
 			return nil, err
 		}
+		if a.Model.Provider == "fake" {
+			return nil, fmt.Errorf("eval: agent %s: provider fake is not supported by adlc eval", p)
+		}
 		agents = append(agents, a)
 	}
 	return agents, nil
