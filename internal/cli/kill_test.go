@@ -207,3 +207,19 @@ func TestResumeStopsWhenRunKilled(t *testing.T) {
 		t.Fatalf("code %d stdout %q stderr %q", code, out, errOut)
 	}
 }
+
+func TestApproveStopsWhenRunKilled(t *testing.T) {
+	e := pausedRun(t)
+	cdb := controlPath(t)
+	if code, _, errOut := execCLI(t, "kill", "run", "r1", "--reason", "too risky", "--control-db", cdb); code != 0 {
+		t.Fatal(errOut)
+	}
+	code, out, errOut := execCLI(t, "approve", "a-call_1", "r1", e.agent, "--fake-script", e.approveScript,
+		"--db", e.db, "--by", "bob", "--control-db", cdb)
+	if code != 2 || !strings.Contains(out, "detail:  killed: too risky\n") {
+		t.Fatalf("code %d stdout %q stderr %q", code, out, errOut)
+	}
+	if _, err := os.Stat(e.workspaceFile()); !os.IsNotExist(err) {
+		t.Fatalf("approved call wrote out.txt after the run was killed (%v)", err)
+	}
+}

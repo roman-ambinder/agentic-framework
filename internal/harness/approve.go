@@ -282,12 +282,15 @@ func resolveItem(item approvalItem, tail []*adlcv1.Event, aid string, res Resolu
 	return item
 }
 
-// runApproved runs a call whose approval was granted: PreTool hooks, the
-// tool and PostTool hooks, but no policy check and no budget check (the call
-// was counted when it was requested). It sets l.final when the run stops.
+// runApproved runs a call whose approval was granted: the kill check, PreTool
+// hooks, the tool and PostTool hooks, but no policy check and no budget check
+// (the call was counted when it was requested). It sets l.final when the run stops.
 func (l *loop) runApproved(call model.ToolCall, reqSeq uint64) error {
 	if l.ctx.Err() != nil {
 		return l.finish(adlcv1.StopReason_STOP_REASON_CANCELLED, "", "")
+	}
+	if stopped, err := l.checkKill(); stopped || err != nil {
+		return err
 	}
 	tool, known := l.byName[call.Name]
 	if !known {

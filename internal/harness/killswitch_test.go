@@ -157,3 +157,13 @@ func TestResumeChecksKillSwitch(t *testing.T) {
 		t.Fatalf("Remaining = %d, want 2", r.model.Remaining())
 	}
 }
+
+func TestApproveKilledRunNeverRunsApprovedCall(t *testing.T) {
+	e := newPaused(t, toolTurn(writeCall("w1")))
+	e.deps.KillSwitch = &fakeKillSwitch{killAt: 1, reason: "paused too long"}
+	r := e.approve(t, yes("a-w1"), textTurn("done"))
+	if *e.calls != 0 {
+		t.Fatalf("approved tool ran %d times after the run was killed", *e.calls)
+	}
+	wantStop(t, r.state, stopCancelled, "killed: paused too long")
+}
