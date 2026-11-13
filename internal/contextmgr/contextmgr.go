@@ -128,12 +128,18 @@ func elidable(msgs []model.Message, protectedFrom int) []location {
 			continue
 		}
 		for j, p := range msgs[i].Parts {
-			if p.Kind == model.PartToolResult && p.ToolResult != nil && !strings.HasPrefix(p.ToolResult.Content, elidedPrefix) {
+			if p.Kind == model.PartToolResult && p.ToolResult != nil && worthEliding(p.ToolResult.Content) {
 				out = append(out, location{i, j})
 			}
 		}
 	}
 	return out
+}
+
+// worthEliding reports whether replacing content with its placeholder makes
+// the request smaller: not already elided, and longer than the placeholder.
+func worthEliding(content string) bool {
+	return !strings.HasPrefix(content, elidedPrefix) && len(placeholderFor(content)) < len(content)
 }
 
 func placeholderFor(content string) string {

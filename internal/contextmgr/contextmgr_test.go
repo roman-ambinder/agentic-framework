@@ -261,3 +261,16 @@ func TestBuildSkipsAlreadyElidedResults(t *testing.T) {
 		}
 	}
 }
+
+// A placeholder is about 70 bytes; replacing a shorter output would make the
+// request bigger, so such outputs are left alone even when over budget.
+func TestBuildLeavesShortOutputs(t *testing.T) {
+	req := transcript(6, 10)
+	_, st, err := Build(context.Background(), req, Budget{MaxInputTokens: 1})
+	if !errors.Is(err, ErrContextTooLarge) {
+		t.Fatalf("err = %v, want ErrContextTooLarge", err)
+	}
+	if st.ElidedResults != 0 {
+		t.Errorf("ElidedResults = %d, want 0: eliding 10-byte outputs only grows the request", st.ElidedResults)
+	}
+}
