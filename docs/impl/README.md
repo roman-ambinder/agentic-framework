@@ -56,7 +56,7 @@ A task can start once everything in "Depends on" is merged.
 | ID | Brief | Size | Depends on |
 |----|-------|------|-----------|
 | 1.1 | [Anthropic adapter: streaming, caching, token counting](tasks/1.1-anthropic-full.md) | M | 0.5b |
-| 1.2 | [OpenAI adapter](tasks/1.2-openai.md) | M | 0.4 |
+| 1.2 | [OpenAI adapter](tasks/1.2-openai.md) | M | 0.4, 0.9.2 |
 | 1.3 | [Model router and fallback](tasks/1.3-model-router.md) | S | 1.1, 1.2 |
 | 1.4.1 | [Sandbox interface and Docker backend](tasks/1.4.1-sandbox-docker.md) | M | 0.0 |
 | 1.4.2 | [Sandbox limits, network, workspace](tasks/1.4.2-sandbox-isolation.md) | M | 1.4.1 |

@@ -53,17 +53,26 @@ Patches are made with `git diff` inside the fixture directory, so their paths
 look like `a/internal/stock/stock.go` / `b/internal/stock/stock.go` and are
 relative to the fixture root.
 
-`meta.yaml` example:
+`meta.yaml` (canonical format; task E.2 writes these files, and
+`evals/scripts/check-bug.sh` from E.2 and the E.4 procedure read the
+`fixture:` and `test_package:` lines and the `hidden_tests` block list with
+`sed`, so keep top-level keys unindented and write lists as block lists):
 
 ```yaml
-id: stock-negative-reserve
+id: money-split-remainder
 difficulty: easy            # easy | medium | hard
+title: Splitting an amount loses a cent   # short human summary; the agent never sees it
 fixture: ledger             # directory name under evals/fixtures
-test_package: internal/stock  # where hidden_test.go goes, relative to the fixture root ("." = root)
-hidden_tests:               # top-level test function names in hidden_test.go
-  - TestReserveRejectsNegativeQuantity
+test_package: money         # where hidden_test.go goes, relative to the fixture root ("." = root)
+hidden_tests:               # top-level test function names in hidden_test.go; each starts with TestHidden
+  - TestHiddenSplitKeepsRemainder
 timeout: 2m                 # max time for one `go test` run of the hidden tests
+fix_files:                  # files the reference fix changes, relative to the fixture root
+  - money/money.go
 ```
+
+The hidden test is always copied to `<test_package>/adlc_hidden_test.go`
+(`HiddenTestPath`); there is no per-bug path.
 
 ### Go types (`internal/evals/suite.go`)
 
@@ -83,10 +92,12 @@ const (
 type Meta struct {
 	ID          string        `yaml:"id"`
 	Difficulty  Difficulty    `yaml:"difficulty"`
+	Title       string        `yaml:"title"`
 	Fixture     string        `yaml:"fixture"`
 	TestPackage string        `yaml:"test_package"`
 	HiddenTests []string      `yaml:"hidden_tests"`
 	Timeout     time.Duration `yaml:"timeout"`
+	FixFiles    []string      `yaml:"fix_files"`
 }
 
 // Bug is one seeded bug with its files loaded into memory.
@@ -140,12 +151,15 @@ joined with `errors.Join`, and the whole result wrapped as
 | `id` differs from the directory name | `id "<id>" does not match directory name` |
 | `id` not matching `^[a-z0-9][a-z0-9-]*$` | `id "<id>" must be lowercase letters, digits and dashes` |
 | `difficulty` not easy/medium/hard | `difficulty "<d>" must be easy, medium or hard` |
+| `title` empty | `title is empty` |
 | fixture directory or its `go.mod` missing | `fixture "<f>" not found (looked in <path>)` |
 | `test_package` directory missing inside the fixture | `test_package "<p>" not found in fixture "<f>"` |
 | `hidden_tests` empty | `hidden_tests is empty` |
-| a hidden test name not matching `^Test[A-Za-z0-9_]*$` | `hidden test "<n>" is not a valid test name` |
+| a hidden test name not matching `^TestHidden[A-Za-z0-9_]*$` | `hidden test "<n>" must match ^TestHidden[A-Za-z0-9_]*$` |
 | a hidden test name not found as `func <name>(t *testing.T)` in hidden_test.go | `hidden test "<n>" not found in hidden_test.go` |
 | `timeout` ≤ 0 or > 10m | `timeout must be between 1s and 10m` |
+| `fix_files` empty | `fix_files is empty` |
+| a `fix_files` entry not a regular file inside the fixture | `fix file "<p>" not found in fixture "<f>"` |
 | `issue.md`, `bug.patch`, `fix.patch` or `hidden_test.go` missing or empty | `<file> is missing or empty` |
 | two bugs with the same id (cannot happen with dir names, skip) | — |
 | suite has no bug directories | `evals: suite has no bugs` (no bug-dir prefix) |
@@ -253,10 +267,11 @@ and a context timeout of `bug.Timeout`.
 3. Create `internal/evals/testdata/fixtures/tiny/`: `go.mod` (`module tiny`, `go 1.26`) and
    `calc/calc.go` with `package calc` and `func Add(a, b int) int { return a + b }`.
 4. Create `internal/evals/testdata/suites/mini/ok-001/` with: `meta.yaml`
-   (`id: ok-001`, `difficulty: easy`, `fixture: tiny`, `test_package: calc`,
-   `hidden_tests: [TestAddSmall]`, `timeout: 1m`), `issue.md` ("Add returns the wrong sum."),
+   (`id: ok-001`, `difficulty: easy`, `title: Add subtracts`, `fixture: tiny`, `test_package: calc`,
+   `hidden_tests` block list with `TestHiddenAddSmall`, `timeout: 1m`, `fix_files` block list with `calc/calc.go`),
+   `issue.md` ("Add returns the wrong sum."),
    `bug.patch` (changes `a + b` to `a - b`; produce it with `git diff` in a scratch copy),
-   `fix.patch` (changes it back), `hidden_test.go` (`package calc`, `TestAddSmall` asserting `Add(2, 3) == 5`).
+   `fix.patch` (changes it back), `hidden_test.go` (`package calc`, `TestHiddenAddSmall` asserting `Add(2, 3) == 5`).
    Note: the testdata path `testdata/suites/mini` → fixtures at `testdata/fixtures`, matching the `../../fixtures` rule.
 5. Write `suite.go`: types, `LoadSuite`, `(*Suite).Bug`. Read bug dirs with `os.ReadDir`,
    sort by name, collect problems in a `[]error`.
@@ -291,7 +306,7 @@ and a context timeout of `bug.Timeout`.
 
 `suite_test.go` (no build tag; uses `testdata/`):
 - `TestLoadSuiteMini` — loads `testdata/suites/mini`; 1 bug, `ID == "ok-001"`, `Difficulty == Easy`, `Timeout == time.Minute`, `Issue` non-empty, `Fixtures["tiny"].Dir` ends with `testdata/fixtures/tiny`.
-- `TestLoadSuiteValidation` — table test; each case copies the mini suite into `t.TempDir()` (with a sibling `fixtures` dir two levels up, i.e. `<tmp>/suites/mini` and `<tmp>/fixtures/tiny`), breaks one thing, and checks `errors.Is(err, ErrInvalidSuite)` and that `err.Error()` contains the exact problem text from the table above. Cases: id mismatch, bad id chars, bad difficulty, missing fixture, missing test_package, empty hidden_tests, invalid test name, test name not in file, timeout 0, timeout 11m, missing issue.md, empty bug.patch, unknown meta field (`bogus: 1` → contains `unknown field "bogus"`).
+- `TestLoadSuiteValidation` — table test; each case copies the mini suite into `t.TempDir()` (with a sibling `fixtures` dir two levels up, i.e. `<tmp>/suites/mini` and `<tmp>/fixtures/tiny`), breaks one thing, and checks `errors.Is(err, ErrInvalidSuite)` and that `err.Error()` contains the exact problem text from the table above. Cases: id mismatch, bad id chars, bad difficulty, empty title, missing fixture, missing test_package, empty hidden_tests, test name without `TestHidden` prefix, test name not in file, timeout 0, timeout 11m, empty fix_files, fix file not in fixture, missing issue.md, empty bug.patch, unknown meta field (`bogus: 1` → contains `unknown field "bogus"`).
 - `TestLoadSuiteReportsAllProblems` — two broken bugs → error text contains both problems.
 - `TestLoadSuiteEmpty` — suite dir with no subdirectories → contains `evals: suite has no bugs`.
 

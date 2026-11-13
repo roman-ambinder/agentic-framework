@@ -82,6 +82,9 @@ Run one package's tests: `go test ./internal/eventlog/ -run TestName -v`.
 - Use `t.TempDir()` for files and databases; never write outside it.
 - Tests never use the network and never call a real model. Real API calls
   live in files with `//go:build live` and run only with `go test -tags live`.
+- Never write a real model id into the repository. Agent files use
+  `name: ${ADLC_ANTHROPIC_MODEL}` / `${ADLC_OPENAI_MODEL}`, and live tests read
+  the same environment variables (skip when unset).
 - Use the scripted fake model (`internal/model`, `model.NewFake`) for harness tests.
 - A test name says what it checks: `TestAppendRejectsSecondRunStarted`.
 - When you fix a bug, first add a test that fails, then fix.

@@ -48,8 +48,9 @@ results, written down in §8 before work moves on.
 first on a scripted fake model and then on one real model, with every step in
 the event log and a readable trace.
 
-**Demo:** `adlc run examples/hello.yaml --model fake` and then `--model anthropic`;
-both print a span tree with cost, and `adlc trace <run>` replays it from the log.
+**Demo:** `adlc run examples/hello.yaml --task "What does greeting.txt say?" --fake-script examples/hello.fake.json`,
+then the same task with `examples/hello-anthropic.yaml` and `ADLC_ANTHROPIC_MODEL` set; both print a run
+summary with cost, and `adlc trace <run>` prints the span tree from the log.
 
 Tasks (sizes, dependencies and a brief for each: `docs/impl/README.md`):
 
@@ -82,7 +83,7 @@ agent first runs, there's a score waiting for it.
 **Goal:** a coder agent in a Docker sandbox fixes seeded bugs, scored by the
 eval suite, with both providers compared.
 
-**Demo:** `adlc eval suites/go-bugs --providers anthropic,openai` prints pass@1,
+**Demo:** `adlc eval evals/suites/go-bugs --agents agents/sdlc/coder.anthropic.yaml,agents/sdlc/coder.openai.yaml` prints pass@1,
 cost and steps per fixture and provider.
 
 - **1.1** Anthropic adapter: streaming, prompt caching, token counting · **1.2** OpenAI adapter · **1.3** model router and fallback

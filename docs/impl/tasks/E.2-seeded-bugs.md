@@ -30,7 +30,7 @@ evals/suites/go-bugs/<id>/meta.yaml
 evals/scripts/check-bug.sh
 ```
 
-Change: `Makefile` — target `bugs-check`, added to `ci`.
+Change: `Makefile` — target `bugs-check` (not part of `ci`; task E.3 adds the CI job `evals-check`).
 
 ## Design
 
@@ -51,23 +51,28 @@ Change: `Makefile` — target `bugs-check`, added to `ci`.
 - `fix.patch` — the reference fix, relative to the bugged tree, same format. (Normally the exact reverse of
   `bug.patch`.)
 - `hidden_test.go` — one external test file (`package <pkg>_test`); every test function name starts with `TestHidden`.
-- `meta.yaml`, exactly these keys and this indentation (the check script reads it with `sed`):
+- `meta.yaml` — the canonical format defined in task E.3 (`docs/impl/tasks/E.3-fixture-loader.md`, "On-disk
+  format"). Exactly these keys, top-level keys unindented, lists as block lists (the check script reads the
+  `test_package:` line with `sed`):
 
 ```yaml
 id: money-split-remainder
 difficulty: easy
 title: Splitting an amount loses a cent
 fixture: ledger
-hidden_test:
-  path: money/hidden_split_test.go
-  package: ./money
-  run: ^TestHidden
+test_package: money
+hidden_tests:
+  - TestHiddenSplitRemainder
+timeout: 2m
 fix_files:
   - money/money.go
 ```
 
-`id` equals the directory name and matches `^[a-z0-9-]+$`. `hidden_test.path` is where the file is copied inside
-the fixture; its directory must be the package of `hidden_test.package`.
+`id` equals the directory name and matches `^[a-z0-9][a-z0-9-]*$`. `test_package` is the fixture directory the
+hidden test belongs to; the test is always copied to `<test_package>/adlc_hidden_test.go`. `hidden_tests` lists
+every top-level test function in `hidden_test.go` (each starts with `TestHidden`). `title` is the issue title
+without `# `. `fix_files` lists the files the reference fix changes (the "files:" of each bug below).
+Use `timeout: 2m` for every bug.
 
 ### Creating a bug (do this for each)
 
@@ -94,9 +99,11 @@ root="$(git rev-parse --show-toplevel)"
 bug="$root/evals/suites/go-bugs/$id"
 work="$(mktemp -d)"
 cp -R "$root/evals/fixtures/ledger/." "$work/"
-dest="$(sed -n 's/^  path: //p' "$bug/meta.yaml")"
-pkg="$(sed -n 's/^  package: //p' "$bug/meta.yaml")"
-run="$(sed -n 's/^  run: //p' "$bug/meta.yaml")"
+pkgdir="$(sed -n 's/^test_package: *//p' "$bug/meta.yaml")"
+[ -n "$pkgdir" ] || { echo "$id: meta.yaml has no test_package line"; exit 1; }
+dest="$pkgdir/adlc_hidden_test.go"
+pkg="./$pkgdir"
+run='^TestHidden
 cd "$work"
 step() { printf '%-40s' "$id: $1"; }
 step "clean: hidden test passes"
@@ -125,7 +132,8 @@ bugs-check: ## Check every seeded bug (bug applies, hidden test fails, fix works
 	@for d in evals/suites/go-bugs/*/; do evals/scripts/check-bug.sh "$$(basename "$$d")" || exit 1; done
 ```
 
-Add to `.PHONY` and to the `ci:` prerequisites (after `fixtures-test`).
+Add to `.PHONY`. Do **not** add it to `ci:` (it runs `go test` about 40 times); it is the quick tool for
+writing bugs. Task E.3 adds the Go self-check and the CI job that runs on every PR.
 
 ## Bugs
 
@@ -138,7 +146,7 @@ Write `issue.md` with exactly the title and text given (you may fix typos only).
 - Bug: in `Split`, drop the remainder distribution so every part is `a.Minor / n`.
 - Issue: `# Splitting an amount loses a cent` — "When I split 10.00 EUR three ways with `Split` I get 3.33, 3.33 and
   3.33. That's 9.99 — a cent goes missing. The parts should add up to the original amount."
-- Hidden test (`money/hidden_split_test.go`): `TestHiddenSplitRemainder` — 10.00 EUR / 3 → 3.34, 3.33, 3.33;
+- Hidden test (package `money`): `TestHiddenSplitRemainder` — 10.00 EUR / 3 → 3.34, 3.33, 3.33;
   -10.00 EUR / 3 → -3.34, -3.33, -3.33; 0.01 EUR / 4 → 0.01, 0.00, 0.00, 0.00; for n in 1..12 and amounts
   -1001..1001 step 7, parts sum to the amount and differ by at most 1.
 - Fix: restore the remainder distribution.
@@ -167,7 +175,7 @@ Write `issue.md` with exactly the title and text given (you may fix typos only).
 - Issue: `# Month-end statement misses payments made on the last day` — "My statement for March doesn't include the
   payment I made on March 31 in the closing balance, but the payment is listed in the lines. So the running balance
   and the closing balance don't agree."
-- Hidden test (`ledger/hidden_balance_asof_test.go`): `TestHiddenBalanceIncludesAsOfDay` — entry on 2026-03-31;
+- Hidden test (package `ledger`): `TestHiddenBalanceIncludesAsOfDay` — entry on 2026-03-31;
   `Balance(acc, 2026-03-31)` includes it; `Statement` for 2026-03-01..2026-03-31 has `Closing` equal to the last
   line's `Balance`.
 - Fix: inclusive comparison.
@@ -209,7 +217,7 @@ Write `issue.md` with exactly the title and text given (you may fix typos only).
 - Issue: `# Customer statements: running balance never reaches the closing balance` — "On statements for customer
   deposit accounts the opening balance is negative and the running balance at the bottom doesn't match the closing
   balance. Statements for our bank account look fine."
-- Hidden test (`ledger/hidden_statement_sign_test.go`): `TestHiddenLiabilityStatementOpening` — liability account
+- Hidden test (package `ledger`): `TestHiddenLiabilityStatementOpening` — liability account
   `liabilities:customer:1`; deposit of 100.00 before `From` (bank +100.00, customer -100.00) and 50.00 inside the
   period; `Opening` = 100.00, last line `Balance` = 150.00 = `Closing`.
 - Fix: apply `Normal()` to `Opening` too.
@@ -230,7 +238,7 @@ Write `issue.md` with exactly the title and text given (you may fix typos only).
 - Issue: `# Refund reversed twice` — "A customer's balance is off by exactly one refund. In the journal there are two
   separate reversals of entry #7. The second one should have been rejected — reversing the same entry twice is
   supposed to fail."
-- Hidden test (`journal/hidden_load_reversed_test.go`): `TestHiddenLoadKeepsReversals` — post an entry, reverse it,
+- Hidden test (package `journal`): `TestHiddenLoadKeepsReversals` — post an entry, reverse it,
   `Save`, `Load`; reversing the original again returns `ErrAlreadyReversed`; reversing the reversal entry succeeds once.
 - Fix: rebuild `reversed` from each loaded entry's `Reverses` field.
 
@@ -241,7 +249,7 @@ Write `issue.md` with exactly the title and text given (you may fix typos only).
    patches as in "Creating a bug", write `issue.md` and `meta.yaml`, run `check-bug.sh`. Commit nothing yet.
 3. Repeat for bugs 2–10. If a visible test fails with a bug applied, the visible test covers a reserved behaviour:
    report it rather than weakening the test (see `AGENTS.md`).
-4. Add `bugs-check` to the Makefile and `ci`. Run `make bugs-check`.
+4. Add `bugs-check` to the Makefile (not to `ci`). Run `make bugs-check`.
 5. Write `evals/suites/README.md` (format, difficulty definitions, how to add a bug).
 6. `make ci`.
 
@@ -280,6 +288,6 @@ git status --short evals/fixtures/   # nothing: the fixture itself is unchanged
 
 - [ ] 10 bug directories, each with the 5 files in the exact format
 - [ ] `evals/suites/go.mod` exists; `go list ./... | grep -c suites` prints 0
-- [ ] `make bugs-check` passes and is part of `make ci`
+- [ ] `make bugs-check` passes (it is not part of `make ci`)
 - [ ] The fixture under `evals/fixtures/ledger` is unchanged
 - [ ] `make ci` passes
