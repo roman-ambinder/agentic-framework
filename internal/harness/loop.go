@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -25,8 +26,9 @@ type loop struct {
 	deps   Deps
 	r      *recorder
 	byName map[string]toolrouter.Tool
-	specs  []model.ToolSpec
-	final  *eventlog.RunState // set by finish
+	specs  []model.ToolSpec    // sorted by name once, reused for every request (task 1.6.2)
+	mgr    *contextmgr.Manager // one per run: keeps elided results elided (task 1.6.2)
+	final  *eventlog.RunState  // set by finish
 
 	startSeq uint64    // seq of the current model_call_started
 	t0       time.Time // when the current model call began
@@ -36,7 +38,11 @@ type loop struct {
 }
 
 func newLoop(ctx context.Context, cfg Config, deps Deps) *loop {
-	return &loop{ctx: ctx, callCtx: ctx, cfg: cfg, deps: deps, r: newRecorder(ctx, deps.Log, cfg.RunID, cfg.AgentID)}
+	return &loop{
+		ctx: ctx, callCtx: ctx, cfg: cfg, deps: deps,
+		r:   newRecorder(ctx, deps.Log, cfg.RunID, cfg.AgentID),
+		mgr: contextmgr.NewManager(cfg.Context),
+	}
 }
 
 // add records ev; a failure is a failure to use the event log.
@@ -136,6 +142,8 @@ func (l *loop) stopForContext() (bool, error) {
 	return false, nil
 }
 
+// loadTools reads the tools once per run. The specs are sorted by name so that
+// every request lists them in the same order: the prompt cache needs it (task 1.6.2).
 func (l *loop) loadTools() {
 	tools := l.deps.Tools.Tools()
 	l.byName = make(map[string]toolrouter.Tool, len(tools))
@@ -143,6 +151,7 @@ func (l *loop) loadTools() {
 		l.byName[t.Spec.Name] = t
 		l.specs = append(l.specs, t.Spec)
 	}
+	slices.SortFunc(l.specs, func(a, b model.ToolSpec) int { return strings.Compare(a.Name, b.Name) })
 }
 
 // step runs one model call and the tool calls it asks for. It sets l.final
@@ -152,6 +161,8 @@ func (l *loop) step(step uint32) error {
 	if err != nil {
 		return err
 	}
+	// System is cfg.System in every step, byte for byte: nothing per step (step
+	// number, time, id) may go into it, or the prompt cache misses (task 1.6.2).
 	req := &model.Request{
 		Model: l.cfg.Model, System: l.cfg.System, Messages: msgs, Tools: l.specs,
 		MaxTokens: l.cfg.MaxTokens, Effort: l.cfg.Effort,
@@ -180,7 +191,7 @@ func (l *loop) step(step uint32) error {
 // compact fits req into Config.Context. When the request cannot fit, it
 // records error_occurred and finishes the run (l.final is set).
 func (l *loop) compact(req *model.Request) (*model.Request, error) {
-	out, _, err := contextmgr.Build(l.callCtx, req, l.cfg.Context)
+	out, _, err := l.mgr.Prepare(l.callCtx, req)
 	switch {
 	case err == nil:
 		return out, nil
