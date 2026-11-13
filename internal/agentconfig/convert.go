@@ -7,6 +7,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	adlcv1 "github.com/roman-ambinder/agentic-framework/gen/go/adlc/v1"
+	"github.com/roman-ambinder/agentic-framework/internal/contextmgr"
 	"github.com/roman-ambinder/agentic-framework/internal/model"
 	"github.com/roman-ambinder/agentic-framework/internal/policy"
 )
@@ -49,6 +50,12 @@ func (a *Agent) BudgetProto() *adlcv1.Budget {
 	}
 	out.MaxUsdMicros, _ = ParseMicroUSD(b.MaxUSD)
 	return out
+}
+
+// ContextBudget returns the context section as a contextmgr.Budget, for
+// harness.Config.Context. Zero fields keep their defaults.
+func (a *Agent) ContextBudget() contextmgr.Budget {
+	return contextmgr.Budget{MaxInputTokens: a.Context.MaxInputTokens, KeepRecentSteps: a.Context.KeepRecentSteps}
 }
 
 // PolicyEngine builds the static policy, rules in file order.

@@ -40,6 +40,7 @@ func (a *Agent) Validate() error {
 	}
 	a.validateTools(&p)
 	a.validateBudget(&p)
+	a.validateContext(&p)
 	a.validatePolicy(&p)
 	return errors.Join(p...)
 }
@@ -114,6 +115,15 @@ func (a *Agent) validateBudget(p *problems) {
 	}
 	if _, err := ParseMicroUSD(a.Budget.MaxUSD); err != nil {
 		p.add("budget.max_usd", moneyMsg, a.Budget.MaxUSD)
+	}
+}
+
+func (a *Agent) validateContext(p *problems) {
+	if a.Context.MaxInputTokens < 0 {
+		p.add("context.max_input_tokens", "must be >= 0, got %d", a.Context.MaxInputTokens)
+	}
+	if a.Context.KeepRecentSteps < 0 {
+		p.add("context.keep_recent_steps", "must be >= 0, got %d", a.Context.KeepRecentSteps)
 	}
 }
 

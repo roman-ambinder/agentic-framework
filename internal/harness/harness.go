@@ -11,6 +11,7 @@ import (
 	"time"
 
 	adlcv1 "github.com/roman-ambinder/agentic-framework/gen/go/adlc/v1"
+	"github.com/roman-ambinder/agentic-framework/internal/contextmgr"
 	"github.com/roman-ambinder/agentic-framework/internal/eventlog"
 	"github.com/roman-ambinder/agentic-framework/internal/model"
 	"github.com/roman-ambinder/agentic-framework/internal/policy"
@@ -41,6 +42,9 @@ type Config struct {
 	MaxToolOutputBytes int // 0 = toolrouter.DefaultMaxModelBytes
 	Retry              RetryPolicy
 	Hooks              []Hook
+	// Context limits the size of each model request (task 1.6.1).
+	// MaxInputTokens 0 = derived from the adapter's MaxContextTokens.
+	Context contextmgr.Budget
 }
 
 // Deps are the run's collaborators.
@@ -62,7 +66,17 @@ func Run(ctx context.Context, cfg Config, deps Deps) (*eventlog.RunState, error)
 	if err := validate(cfg, deps); err != nil {
 		return nil, err
 	}
+	cfg.Context = effectiveBudget(cfg.Context, deps.Model.Capabilities())
 	return newLoop(ctx, cfg, deps).run()
+}
+
+// effectiveBudget fills in MaxInputTokens from the adapter's context window
+// (80 %) when the config leaves it at zero and the window is known.
+func effectiveBudget(b contextmgr.Budget, caps model.Caps) contextmgr.Budget {
+	if b.MaxInputTokens == 0 && caps.MaxContextTokens > 0 {
+		b.MaxInputTokens = int64(caps.MaxContextTokens) * 8 / 10
+	}
+	return b
 }
 
 func applyDefaults(cfg Config, deps Deps) (Config, Deps) {

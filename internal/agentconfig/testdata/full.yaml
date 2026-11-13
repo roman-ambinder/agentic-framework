@@ -32,6 +32,9 @@ budget:                           # optional; 0 or missing = no limit
   max_wall_clock: 10m             # Go duration string
   max_usd: "1.00"                 # decimal string
   max_tool_calls: 50
+context:                          # optional; limits the size of each model request
+  max_input_tokens: 150000        # optional; >= 0; default derived from the model (80% of its window)
+  keep_recent_steps: 2            # optional; >= 0; default 2
 policy:
   default: deny                   # required; allow, deny, needs_approval
   rules:                          # optional; first match wins

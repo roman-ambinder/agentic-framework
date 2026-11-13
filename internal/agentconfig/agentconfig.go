@@ -28,6 +28,7 @@ type Agent struct {
 	MaxToolOutputBytes int          `yaml:"max_tool_output_bytes"`
 	Tools              []ToolServer `yaml:"tools"`
 	Budget             Budget       `yaml:"budget"`
+	Context            Context      `yaml:"context"`
 	Policy             Policy       `yaml:"policy"`
 
 	// Dir is the directory of the file Load read ("" for Parse). Not in YAML.
@@ -67,6 +68,12 @@ type Budget struct {
 	MaxWallClock string `yaml:"max_wall_clock"`
 	MaxUSD       string `yaml:"max_usd"`
 	MaxToolCalls uint32 `yaml:"max_tool_calls"`
+}
+
+// Context limits the size of each model request; zero means the default.
+type Context struct {
+	MaxInputTokens  int64 `yaml:"max_input_tokens"`  // 0 = derived from the model
+	KeepRecentSteps int   `yaml:"keep_recent_steps"` // 0 = 2
 }
 
 // Policy is the static policy: a default decision and ordered rules.
