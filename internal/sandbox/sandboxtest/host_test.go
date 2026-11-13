@@ -102,3 +102,27 @@ func TestScriptedRecordsCalls(t *testing.T) {
 		t.Fatalf("Calls = %v", calls)
 	}
 }
+
+func TestHostSetsDefaultHome(t *testing.T) {
+	ctx := context.Background()
+	h := NewHost(t.TempDir())
+	for _, tt := range []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"default", nil, sandbox.DefaultHome + "\n"},
+		{"explicit", map[string]string{"HOME": "/home/x"}, "/home/x\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			hd, err := h.Create(ctx, sandbox.Spec{RunID: "r", Image: "host", Env: tt.env})
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := h.Exec(ctx, hd, []string{"sh", "-c", "echo $HOME"}, 10*time.Second)
+			if err != nil || string(res.Stdout) != tt.want {
+				t.Fatalf("HOME = %q, %v; want %q", res.Stdout, err, tt.want)
+			}
+		})
+	}
+}
