@@ -222,3 +222,30 @@ func TestSystemFileMissing(t *testing.T) {
 	_, err := Parse([]byte(baseYAML + "system_file: nope.md\npolicy: {default: deny}\n"))
 	wantErr(t, err, "system_file:")
 }
+
+func TestContextConfig(t *testing.T) {
+	tests := []struct{ name, yaml, want string }{
+		{"max_input_tokens", baseYAML + "context: {max_input_tokens: -1}\npolicy: {default: deny}\n", "context.max_input_tokens"},
+		{"keep_recent_steps", baseYAML + "context: {keep_recent_steps: -1}\npolicy: {default: deny}\n", "context.keep_recent_steps"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.yaml))
+			wantErr(t, err, tt.want)
+		})
+	}
+}
+
+func TestContextBudget(t *testing.T) {
+	a := loadFull(t)
+	if b := a.ContextBudget(); b.MaxInputTokens != 150000 || b.KeepRecentSteps != 2 {
+		t.Errorf("ContextBudget = %+v", b)
+	}
+	m, err := Load("testdata/minimal.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := m.ContextBudget(); b.MaxInputTokens != 0 || b.KeepRecentSteps != 0 {
+		t.Errorf("default ContextBudget = %+v", b)
+	}
+}

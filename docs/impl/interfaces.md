@@ -657,6 +657,10 @@ func (a *Agent) ToolServers() []ParsedToolServer
 func ParseMicroUSD(s string) (int64, error)
 ```
 
+Task 1.6.1 adds the optional `context:` section (`max_input_tokens`,
+`keep_recent_steps`, both >= 0) and `(*Agent).ContextBudget() contextmgr.Budget`,
+which the CLI wiring assigns to `harness.Config.Context`.
+
 Task 1.3 adds `model.fallbacks` and `(*Agent).Prices() map[string]model.Price`.
 
 CLI wiring (task 0.9.2, `internal/cli/wiring.go`, unexported, shared by

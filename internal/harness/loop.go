@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	adlcv1 "github.com/roman-ambinder/agentic-framework/gen/go/adlc/v1"
+	"github.com/roman-ambinder/agentic-framework/internal/contextmgr"
 	"github.com/roman-ambinder/agentic-framework/internal/eventlog"
 	"github.com/roman-ambinder/agentic-framework/internal/model"
 	"github.com/roman-ambinder/agentic-framework/internal/policy"
@@ -155,6 +156,10 @@ func (l *loop) step(step uint32) error {
 		Model: l.cfg.Model, System: l.cfg.System, Messages: msgs, Tools: l.specs,
 		MaxTokens: l.cfg.MaxTokens, Effort: l.cfg.Effort,
 	}
+	req, err = l.compact(req)
+	if err != nil || l.final != nil {
+		return err
+	}
 	callID := fmt.Sprintf("m%d", step)
 	resp, err := l.callModel(req, callID, step)
 	if err != nil || resp == nil {
@@ -170,6 +175,24 @@ func (l *loop) step(step uint32) error {
 		return err
 	}
 	return l.afterResponse(resp, calls)
+}
+
+// compact fits req into Config.Context. When the request cannot fit, it
+// records error_occurred and finishes the run (l.final is set).
+func (l *loop) compact(req *model.Request) (*model.Request, error) {
+	out, _, err := contextmgr.Build(l.callCtx, req, l.cfg.Context)
+	switch {
+	case err == nil:
+		return out, nil
+	case !errors.Is(err, contextmgr.ErrContextTooLarge):
+		return nil, fmt.Errorf("harness: %w", err)
+	}
+	if _, err2 := l.add(&adlcv1.Event{Payload: &adlcv1.Event_ErrorOccurred{ErrorOccurred: &adlcv1.ErrorOccurred{
+		ErrorClass: adlcv1.ErrorClass_ERROR_CLASS_INTERNAL, Message: err.Error(), Component: "contextmgr",
+	}}}); err2 != nil {
+		return nil, err2
+	}
+	return nil, l.finish(adlcv1.StopReason_STOP_REASON_ERROR, "", "context budget exceeded")
 }
 
 // callModel calls the model, retrying retryable failures as Config.Retry says.
