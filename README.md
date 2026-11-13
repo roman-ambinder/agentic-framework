@@ -33,3 +33,18 @@ make proto-breaking   # compatibility check against main (or AGAINST=<dir|ref>)
 ```bash
 ./bin/adlc version
 ```
+
+## Run the example
+
+`adlc run` loads an agent file, starts its tool servers, runs the agent and
+prints a summary. Exit code 0 means the run completed, 2 means it stopped for
+another reason, 1 means it could not run. The first command uses a scripted
+fake model; the second calls the Anthropic API (needs `ANTHROPIC_API_KEY`).
+
+```bash
+make build
+./bin/adlc run examples/hello.yaml --task "What does greeting.txt say?" \
+  --fake-script examples/hello.fake.json --db bin/demo.db
+ADLC_ANTHROPIC_MODEL=<model id> ./bin/adlc run examples/hello-anthropic.yaml \
+  --task "What does greeting.txt say?" --db bin/demo.db
+```

@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"errors"
 	"io"
 
 	"github.com/spf13/cobra"
@@ -20,6 +21,7 @@ func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	root.SetErr(stderr)
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newToolCmd())
+	root.AddCommand(newRunCmd())
 	return root
 }
 
@@ -28,6 +30,13 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 	root := newRootCmd(stdout, stderr)
 	root.SetArgs(args)
 	if err := root.Execute(); err != nil {
+		var ee *exitError
+		if errors.As(err, &ee) {
+			if ee.err != nil {
+				root.PrintErrln("Error:", ee.err)
+			}
+			return ee.code
+		}
 		root.PrintErrln("Error:", err)
 		return 1
 	}

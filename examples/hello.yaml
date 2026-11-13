@@ -1,0 +1,23 @@
+name: hello
+version: 1
+model:
+  provider: fake
+system: |
+  You answer questions about the files in the workspace. Use the fs tools.
+tools:
+  - server: fs
+    command: ["adlc", "tool", "fs", "--root", "./workspace"]
+    risk:
+      read_file: read
+      list_dir: read
+      write_file: write_local
+budget:
+  max_steps: 5
+  max_tool_calls: 5
+  max_wall_clock: 1m
+policy:
+  default: deny
+  rules:
+    - id: reads
+      risk: read
+      decision: allow
