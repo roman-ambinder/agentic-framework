@@ -17,7 +17,7 @@ LINT     := $(TOOL) golangci-lint
 AGAINST  ?= .git\#branch=main
 
 .PHONY: help build test test-race test-docker lint fmt tidy tidy-check ci clean \
-        proto proto-lint proto-check proto-breaking fixtures-test bugs-check
+        proto proto-lint proto-check proto-breaking fixtures-test bugs-check evals-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-15s %s\n", $$1, $$2}'
@@ -39,6 +39,9 @@ fixtures-test: ## Test the eval fixture repositories
 
 bugs-check: ## Check every seeded bug (bug applies, hidden test fails, fix works)
 	@for d in evals/suites/go-bugs/*/; do evals/scripts/check-bug.sh "$$(basename "$$d")" || exit 1; done
+
+evals-check: ## Check every seeded bug: hidden tests fail on the bug, pass on the fix
+	go test -tags evals -count=1 -run 'TestSeededBugsBehave' ./internal/evals/
 
 lint: ## Run golangci-lint
 	$(LINT) run --allow-parallel-runners ./...

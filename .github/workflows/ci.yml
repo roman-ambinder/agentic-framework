@@ -51,6 +51,16 @@ jobs:
       - name: docker tests
         run: make test-docker
 
+  evals-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: seeded bugs behave
+        run: make evals-check
+
   # Fails a pull request that breaks compatibility of the contracts with its base branch.
   proto-breaking:
     if: github.event_name == 'pull_request'

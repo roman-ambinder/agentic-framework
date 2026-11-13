@@ -2,7 +2,7 @@ version: "2"
 
 run:
   timeout: 5m
-  build-tags: [docker, live]
+  build-tags: [docker, live, evals]
 
 linters:
   default: standard   # errcheck, govet, ineffassign, staticcheck, unused
