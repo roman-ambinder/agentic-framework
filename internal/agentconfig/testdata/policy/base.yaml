@@ -1,0 +1,14 @@
+rules:
+  - id: no-keys
+    args:
+      path: {regex: '.*\.(pem|key)'}
+    decision: deny
+  - id: tmp-reads
+    tool: fs__read_file
+    args:
+      path: {prefix: "tmp/"}
+    decision: allow
+  - id: known-files
+    args:
+      path: {in: [README.md, go.mod]}
+    decision: allow

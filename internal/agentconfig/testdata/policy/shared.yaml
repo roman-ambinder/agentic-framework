@@ -1,0 +1,11 @@
+include:
+  - base.yaml
+rules:
+  - id: docs-writes
+    tool: "fs__write_*"
+    args:
+      path: {glob: "docs/**"}
+    decision: allow
+  - id: other-writes
+    tool: "fs__write_*"
+    decision: needs_approval

@@ -98,6 +98,9 @@ func (l *loop) steps(firstStep uint32) (*eventlog.RunState, error) {
 			err := l.finish(adlcv1.StopReason_STOP_REASON_CANCELLED, "", "")
 			return l.final, err
 		}
+		if stopped, err := l.checkKill(); stopped || err != nil {
+			return l.final, err
+		}
 		if e := beforeModelCall(l.cfg.Budget, l.usage()); e != nil {
 			err := l.finishBudget(e)
 			return l.final, err
@@ -219,6 +222,11 @@ func (l *loop) compact(req *model.Request) (*model.Request, error) {
 func (l *loop) callModel(req *model.Request, callID string, step uint32) (*model.Response, error) {
 	p := l.cfg.Retry.withDefaults()
 	for attempt := 1; ; attempt++ {
+		if attempt > 1 {
+			if stopped, err := l.checkKill(); stopped || err != nil {
+				return nil, err
+			}
+		}
 		resp, genErr, err := l.attemptModel(req, callID, step, attempt)
 		if err != nil {
 			return nil, err
@@ -349,6 +357,9 @@ func (l *loop) runToolCall(call model.ToolCall) error {
 	if l.ctx.Err() != nil {
 		return l.finish(adlcv1.StopReason_STOP_REASON_CANCELLED, "", "")
 	}
+	if stopped, err := l.checkKill(); stopped || err != nil {
+		return err
+	}
 	if e := beforeToolCall(l.cfg.Budget, l.usage()); e != nil {
 		return l.finishBudget(e)
 	}
@@ -372,6 +383,12 @@ func (l *loop) runToolCall(call model.ToolCall) error {
 	if stopped, err := l.authorize(call, tool, reqSeq); stopped || err != nil {
 		return err
 	}
+	return l.execute(call, reqSeq)
+}
+
+// execute runs an authorized call, records tool_call_completed and runs the
+// PostTool hooks. It sets l.final when the run stops.
+func (l *loop) execute(call model.ToolCall, reqSeq uint64) error {
 	res, err := l.callTool(call)
 	if err != nil || l.final != nil {
 		return err

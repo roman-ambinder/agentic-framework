@@ -206,3 +206,148 @@ func TestStaticCancelled(t *testing.T) {
 		t.Errorf("Decision = %+v, want zero value", d)
 	}
 }
+
+func authorizeArgs(t *testing.T, s *Static, tool, args string) Decision {
+	t.Helper()
+	d, err := s.Authorize(context.Background(), Request{Tool: tool, Risk: write, ArgumentsJSON: args})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func TestStaticArgsMatch(t *testing.T) {
+	s := mustStatic(t, []Rule{{ID: "docs", Args: map[string]ArgMatcher{"path": {Glob: "docs/**"}}, Decision: allow}}, deny)
+	tests := []struct{ name, args, wantRule string }{
+		{"match", `{"path":"docs/a"}`, "docs"},
+		{"match with spaces", `{ "path" : "docs/a" }`, "docs"},
+		{"other value", `{"path":"src/a"}`, "default"},
+		{"missing", `{}`, "default"},
+		{"number", `{"path":1}`, "default"},
+		{"null", `{"path":null}`, "default"},
+		{"array", `{"path":["docs/a"]}`, "default"},
+		{"not object", `[1]`, "default"},
+		{"not json", `not json`, "default"},
+		{"empty", ``, "default"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if d := authorizeArgs(t, s, "x", tt.args); d.RuleID != tt.wantRule {
+				t.Errorf("rule = %q, want %q", d.RuleID, tt.wantRule)
+			}
+		})
+	}
+}
+
+func TestStaticArgsAllMustMatch(t *testing.T) {
+	s := mustStatic(t, []Rule{{ID: "r", Args: map[string]ArgMatcher{
+		"path": {Prefix: "a/"}, "mode": {In: []string{"r"}},
+	}, Decision: allow}}, deny)
+	tests := []struct {
+		args, wantRule string
+	}{
+		{`{"path":"a/x","mode":"r"}`, "r"},
+		{`{"path":"a/x","mode":"w"}`, "default"},
+		{`{"path":"b/x","mode":"r"}`, "default"},
+		{`{"path":"a/x"}`, "default"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.args, func(t *testing.T) {
+			if d := authorizeArgs(t, s, "x", tt.args); d.RuleID != tt.wantRule {
+				t.Errorf("rule = %q, want %q", d.RuleID, tt.wantRule)
+			}
+		})
+	}
+}
+
+func TestStaticArgMatchers(t *testing.T) {
+	tests := []struct {
+		name  string
+		m     ArgMatcher
+		value string
+		want  bool
+	}{
+		{"prefix yes", ArgMatcher{Prefix: "tmp/"}, "tmp/x", true},
+		{"prefix no", ArgMatcher{Prefix: "tmp/"}, "x/tmp/", false},
+		{"regex whole", ArgMatcher{Regex: "a+"}, "aaa", true},
+		{"regex not whole", ArgMatcher{Regex: "a+"}, "baa", false},
+		{"regex alternation anchored", ArgMatcher{Regex: "a|b"}, "ab", false},
+		{"in yes", ArgMatcher{In: []string{"a", "b"}}, "b", true},
+		{"in no", ArgMatcher{In: []string{"a", "b"}}, "c", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := mustStatic(t, []Rule{{ID: "r", Args: map[string]ArgMatcher{"v": tt.m}, Decision: allow}}, deny)
+			args := `{"v":"` + tt.value + `"}`
+			if got := authorizeArgs(t, s, "x", args).RuleID == "r"; got != tt.want {
+				t.Errorf("match = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStaticToolGlob(t *testing.T) {
+	s := mustStatic(t, []Rule{
+		{ID: "writes", Tool: "fs__write_*", Decision: allow},
+		{ID: "exact", Tool: "fs__read_file", Decision: allow},
+	}, deny)
+	tests := []struct{ tool, wantRule string }{
+		{"fs__write_file", "writes"},
+		{"fs__read_file", "exact"},
+		{"fs__read_files", "default"},
+		{"fs__list_dir", "default"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.tool, func(t *testing.T) {
+			if d := authorizeArgs(t, s, tt.tool, `{}`); d.RuleID != tt.wantRule {
+				t.Errorf("rule = %q, want %q", d.RuleID, tt.wantRule)
+			}
+		})
+	}
+}
+
+func TestNewStaticRejectsBadMatchers(t *testing.T) {
+	tests := []struct {
+		name string
+		rule Rule
+		want string
+	}{
+		{"tool", Rule{ID: "a", Tool: "fs__[", Decision: allow}, `policy: rule "a": tool: bad glob "fs__[": "[" is not supported`},
+		{"regex", Rule{ID: "a", Args: map[string]ArgMatcher{"path": {Regex: "("}}, Decision: allow}, `policy: rule "a": args.path: bad regex "("`},
+		{"empty name", Rule{ID: "a", Args: map[string]ArgMatcher{"": {Prefix: "x"}}, Decision: allow}, `policy: rule "a": args: empty argument name`},
+		{"none set", Rule{ID: "a", Args: map[string]ArgMatcher{"path": {}}, Decision: allow}, `policy: rule "a": args.path: set exactly one of glob, prefix, regex, in`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewStatic([]Rule{tt.rule}, deny)
+			if err == nil || !strings.HasPrefix(err.Error(), tt.want) {
+				t.Errorf("error = %v, want prefix %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewStaticCopiesArgs(t *testing.T) {
+	in := []string{"a"}
+	args := map[string]ArgMatcher{"v": {In: in}}
+	s := mustStatic(t, []Rule{{ID: "r", Args: args, Decision: allow}}, deny)
+	args["v"] = ArgMatcher{In: []string{"z"}}
+	args["extra"] = ArgMatcher{Prefix: "q"}
+	in[0] = "z"
+	if d := authorizeArgs(t, s, "x", `{"v":"a"}`); d.RuleID != "r" {
+		t.Errorf("rule = %q, want r (caller's changes leaked in)", d.RuleID)
+	}
+	if got := s.Rules[0].Args; len(got) != 1 || got["v"].In[0] != "a" {
+		t.Errorf("Rules[0].Args = %+v", got)
+	}
+}
+
+func TestStaticNullNeverMatchesEmptyString(t *testing.T) {
+	s := mustStatic(t, []Rule{{ID: "any", Args: map[string]ArgMatcher{"v": {Regex: ".*"}}, Decision: allow}}, deny)
+	if d := authorizeArgs(t, s, "x", `{"v":null}`); d.RuleID != "default" {
+		t.Errorf("null matched rule %q", d.RuleID)
+	}
+	if d := authorizeArgs(t, s, "x", `{"v":""}`); d.RuleID != "any" {
+		t.Errorf("empty string matched rule %q, want any", d.RuleID)
+	}
+}

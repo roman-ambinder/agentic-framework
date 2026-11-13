@@ -170,24 +170,55 @@ func (a *Agent) validatePolicy(p *problems) {
 		p.add("policy.default", "must be one of allow, deny, needs_approval, got %q", a.Policy.Default)
 	}
 	seen := map[string]bool{}
+	for _, ir := range a.Policy.Included {
+		validateRule(p, fmt.Sprintf("%s: rules[%d]", ir.File, ir.Index), ir.Rule, seen)
+	}
 	for i, r := range a.Policy.Rules {
-		path := fmt.Sprintf("policy.rules[%d]", i)
-		switch {
-		case r.ID == "":
-			p.add(path+".id", "is required")
-		case r.ID == "default":
-			p.add(path+".id", `rule id "default" is reserved`)
-		case seen[r.ID]:
-			p.add(path+".id", "duplicate rule id %q", r.ID)
+		validateRule(p, fmt.Sprintf("policy.rules[%d]", i), r, seen)
+	}
+}
+
+// validateRule checks one rule; seen holds the ids of the rules before it.
+func validateRule(p *problems, path string, r Rule, seen map[string]bool) {
+	switch {
+	case r.ID == "":
+		p.add(path+".id", "is required")
+	case r.ID == "default":
+		p.add(path+".id", `rule id "default" is reserved`)
+	case seen[r.ID]:
+		p.add(path+".id", "duplicate rule id %q", r.ID)
+	}
+	seen[r.ID] = true
+	if r.Risk != "" {
+		if _, err := policy.ParseRiskClass(r.Risk); err != nil {
+			p.add(path+".risk", "unknown risk class %q", r.Risk)
 		}
-		seen[r.ID] = true
-		if r.Risk != "" {
-			if _, err := policy.ParseRiskClass(r.Risk); err != nil {
-				p.add(path+".risk", "unknown risk class %q", r.Risk)
-			}
+	}
+	if _, err := policy.ParseDecision(r.Decision); err != nil {
+		p.add(path+".decision", "must be one of allow, deny, needs_approval, got %q", r.Decision)
+	}
+	if r.Tool != "" {
+		if err := policy.CheckGlob(r.Tool); err != nil {
+			p.add(path+".tool", "%v", err)
 		}
-		if _, err := policy.ParseDecision(r.Decision); err != nil {
-			p.add(path+".decision", "must be one of allow, deny, needs_approval, got %q", r.Decision)
+	}
+	validateArgs(p, path, r.Args)
+}
+
+// validateArgs checks the argument matchers of a rule in name order.
+func validateArgs(p *problems, path string, args map[string]ArgMatcher) {
+	names := make([]string, 0, len(args))
+	for name := range args {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if name == "" {
+			p.add(path+".args", "empty argument name")
+			continue
+		}
+		if err := args[name].toPolicy().Check(); err != nil {
+			p.add(path+".args."+name, "%v", err)
 		}
 	}
 }

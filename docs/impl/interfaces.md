@@ -371,11 +371,13 @@ type Client interface {
 // AllowAll allows everything. Tests only.
 type AllowAll struct{}
 
-// Rule matches on risk class and (optionally) tool name. First match wins.
+// Rule matches on risk class, tool name glob and (optionally) arguments.
+// All given conditions must hold. First match wins.
 type Rule struct {
 	ID       string
-	Risk     adlcv1.RiskClass // UNSPECIFIED = any risk
-	Tool     string           // "" = any tool; exact match otherwise
+	Risk     adlcv1.RiskClass       // UNSPECIFIED = any risk
+	Tool     string                 // "" = any tool; otherwise a glob (a plain name matches exactly)
+	Args     map[string]ArgMatcher  // nil = any arguments; every entry must match
 	Decision adlcv1.Decision
 }
 
@@ -388,6 +390,17 @@ type Static struct {
 // NewStatic validates the rules (ids non-empty, unique, not "default";
 // decisions set; def set) and returns a Static holding a copy of rules.
 func NewStatic(rules []Rule, def adlcv1.Decision) (*Static, error)
+
+// ArgMatcher (task C.2): exactly one of Glob, Prefix, Regex, In; matches a
+// top-level JSON string argument; missing or non-string never matches.
+type ArgMatcher struct {
+	Glob   string   // "*" no "/", "**" anything, "?" one char not "/"; [ ] { } \ rejected
+	Prefix string
+	Regex  string   // whole value: ^(?:Regex)$
+	In     []string
+}
+func (m ArgMatcher) Check() error // error text has no "policy:" prefix
+func CheckGlob(glob string) error // same
 
 // Names used in agent.yaml (task 0.9.1).
 var ErrUnknownName = errors.New("policy: unknown name")
@@ -532,6 +545,16 @@ type Deps struct {
 	Policy policy.Client
 	Now    func() time.Time                                  // default time.Now
 	Sleep  func(ctx context.Context, d time.Duration) error // default: timer + ctx
+	// KillSwitch, if set, is asked before every model call and every tool
+	// call whether the run must stop (task C.3). nil = no kill switch.
+	KillSwitch KillSwitch
+}
+
+// KillSwitch says whether a run has been killed; *controlplane.Store implements it.
+type KillSwitch interface {
+	// Killed reports whether the run runID of agent agentID (Config.AgentID,
+	// "name@version") must stop, and why.
+	Killed(ctx context.Context, runID, agentID string) (killed bool, reason string, err error)
 }
 
 // Run executes a new run until it stops and returns its final state.
@@ -586,6 +609,33 @@ var (
 const AbandonedOutput = "abandoned: the run stopped while this tool call was running; it may or may not have taken effect. Check before repeating it."
 const NotRunOutput = "not run: the run stopped before this tool call started. Call it again if it is still needed."
 ```
+
+```go
+// Approvals (task C.1). Approve continues a paused run in place once its last
+// pending approval is resolved; ResolveApproval records one of several.
+type Resolution struct {
+	ApprovalID string
+	Approved   bool
+	By         string // required
+	Comment    string
+}
+func CheckApproval(events []*adlcv1.Event, runID, approvalID string) (*eventlog.RunState, error)
+func ResolveApproval(ctx context.Context, log Log, runID string, res Resolution) (*eventlog.RunState, error)
+func Approve(ctx context.Context, cfg Config, deps Deps, res Resolution) (*eventlog.RunState, error)
+func RejectedOutput(by, comment string) string // "rejected by <by>[: <comment>]"
+var (
+	ErrRunNotPaused     = errors.New("harness: run is not waiting for approval")
+	ErrUnknownApproval  = errors.New("harness: unknown approval")
+	ErrApprovalResolved = errors.New("harness: approval already resolved")
+	ErrContinueRun      = errors.New("harness: last pending approval: the run must be continued with Approve")
+)
+```
+
+`Approve` appends `approval_resolved` (parent = its `approval_requested`); an approved call runs PreTool hooks, the tool and
+PostTool hooks without a second policy check; a rejected call gets an error
+`tool_call_completed` with `RejectedOutput`; the remaining calls of the step
+run normally, then a checkpoint, then the loop. Time spent paused does not
+count against `max_wall_clock`.
 
 `Resume` ignores `cfg.Task` (the task is in `run_started`), only appends events
 (first `run_resumed{next_step, verified_checkpoint_seq, abandoned_tool_calls,
@@ -642,6 +692,7 @@ where the process stopped; it creates no message in `Transcript`.
 | Policy client returned an error | `ERROR` | `policy: <error>` |
 | Request too large for `Config.Context` (task 1.6.1) | `ERROR` | `context budget exceeded` |
 | `ctx` cancelled | `CANCELLED` | |
+| Kill switch says the run is killed (task C.3) | `CANCELLED` | `killed: <reason>` |
 
 Not a stop: an **unknown tool** (name not in `Tools()`) gets
 `tool_call_requested` with risk UNSPECIFIED and an error `tool_call_completed`
@@ -668,11 +719,22 @@ func (a *Agent) BudgetProto() *adlcv1.Budget    // nil if no limits
 func (a *Agent) PolicyEngine() *policy.Static
 func (a *Agent) ToolServers() []ParsedToolServer
 func ParseMicroUSD(s string) (int64, error)
+
+const AgentFileName = "agent.yaml"                    // task C.4
+type SourceFile struct{ Path string; Data []byte }     // Agent.Sources: agent file first, then system_file and policy files
+func DigestFiles(files []SourceFile) string            // "sha256:<hex>", algorithm in brief C.4
+func (a *Agent) Digest() string
+func LoadAt(path, workDir string) (*Agent, error)      // Agent.Dir = workDir; system_file relative to the file
 ```
 
 Task 1.6.1 adds the optional `context:` section (`max_input_tokens`,
 `keep_recent_steps`, both >= 0) and `(*Agent).ContextBudget() contextmgr.Budget`,
 which the CLI wiring assigns to `harness.Config.Context`.
+
+Task C.2 adds `policy.include` (policy files, `PolicyFile{include, rules}`, paths relative to the naming file, no
+`default`), `args` matchers and tool globs in rules, and
+`Policy.Included []IncludedRule`; `PolicyEngine` evaluates included rules
+(depth first, each file once) before the agent's rules.
 
 Every `model.pricing` field (also in fallbacks) may, like `model.name`, be
 exactly `${VAR}`: it is replaced by the environment variable, an unset or empty
@@ -842,10 +904,14 @@ func ParseTestOutput(bug Bug, output []byte, exitCode int, timedOut bool) TestOu
 const DefaultImage = "golang:1.26"
 // task 1.8: AgentRun, Runner (RunOne, RunAll), Result, Report, WriteReport, PrintTable
 // task 1.9: Check, Grade, Bucket, ProviderSummary, Summary, Summarize
+// task Q.1: Runner.Repeat, Result.Attempt, Report.Repeat, PassAtK, BugAttempts, AgentBucket, AgentSummary, Summary.ByAgent, SummarizeAgents, AgentPair, AgentName, ReportInfo, CompareRow, BugChange, PairComparison, Comparison, BugStatus, Compare, PrintComparison
+// task Q.2: FailureCause and its Cause* constants, FailureCauses, Failure, FailureReport, EventReader, Classify, AnalyzeFailures, PrintFailures
 ```
 
 Exact field lists: briefs E.3, 1.8 and 1.9. Eval results are stored in the
 JSON report (with run ids), not as events.
+
+`Result.AgentDigest` (`agent_digest`, task C.4) is the digest of the agent file that produced the result.
 
 ## §10 Planned schema additions
 
@@ -911,7 +977,73 @@ match `Config.AgentID` exactly (`hello@1`) or by name (`hello`); registry:
 `Ref`, `ParseRef`, `Env`, `ParseEnv`, `AgentVersion`, `Register`, `Version`,
 `Versions`, `Resolve`, `Gate`, `Promotion`, `Promote`.
 
+#### Control plane API (C.3)
+
+```go
+package controlplane
+
+func Open(ctx context.Context, path string, opts ...Option) (*Store, error) // "" and ":memory:" refused
+func WithClock(now func() time.Time) Option
+func (s *Store) Close() error
+
+type Scope string // ScopeRun "run", ScopeAgent "agent", ScopeAll "all"
+type Kill struct {
+	Scope     Scope
+	Target    string // run id, agent name or name@version, "" for all
+	Reason    string
+	CreatedAt time.Time // UTC
+}
+
+func (s *Store) Kill(ctx context.Context, scope Scope, target, reason string) error
+func (s *Store) Unkill(ctx context.Context, scope Scope, target string) error
+func (s *Store) Active(ctx context.Context) ([]Kill, error)
+func (s *Store) Killed(ctx context.Context, runID, agentID string) (bool, string, error)
+
+var ErrSchemaTooNew, ErrInvalidKill, ErrKillNotFound error
+```
+
+Agent kills match `Config.AgentID` exactly (`hello@1`) or by name (`hello` = every version).
+
+#### Agent registry API (C.4)
+
+```go
+package controlplane
+
+type Env string // EnvStaging "staging", EnvProd "prod"
+type Ref struct { Name string; Version int; Env Env } // NAME@N or NAME@ENV
+func ParseRef(s string) (Ref, error)
+func (r Ref) String() string
+func ParseEnv(s string) (Env, error)
+
+type AgentVersion struct {
+	Name string; Version int
+	AgentID, Digest, SourceDir string
+	CreatedAt time.Time
+	Envs  []Env                    // environments whose current version this is
+	Files []agentconfig.SourceFile // nil from Versions
+}
+func (v AgentVersion) Ref() string // "name@N"
+
+func (s *Store) Register(ctx context.Context, a *agentconfig.Agent) (v AgentVersion, created bool, err error)
+func (s *Store) Version(ctx context.Context, name string, version int) (AgentVersion, error)
+func (s *Store) Versions(ctx context.Context) ([]AgentVersion, error)
+func (s *Store) Resolve(ctx context.Context, ref Ref) (AgentVersion, error)
+
+type Gate struct { MinPassAt1 float64; MaxMedianUSDMicros int64 } // < 0 = no cost limit
+type Promotion struct {
+	Name string; Version int; Env Env; ReportPath string
+	PassAt1 float64; Runs int; MedianUSDMicros int64; PromotedAt time.Time
+}
+func (s *Store) Promote(ctx context.Context, name string, version int, env Env,
+	rep evals.Report, reportPath string, g Gate) (Promotion, error)
+
+var ErrInvalidRef, ErrInvalidAgent, ErrVersionNotFound, ErrNotPromoted, ErrReportMismatch, ErrPromotionRefused error
+```
+
 ### Evals (`internal/evals`)
+
+The complete lists of Q.1 and Q.2 names are in §9; the lines below are a summary.
+
 
 - **C.4:** `Result.AgentDigest` (`agent_digest`).
 - **Q.1:** `Runner.Repeat`, `Result.Attempt`, `Report.Repeat`, `PassAtK`,
