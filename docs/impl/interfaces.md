@@ -673,6 +673,12 @@ Task 1.6.1 adds the optional `context:` section (`max_input_tokens`,
 `keep_recent_steps`, both >= 0) and `(*Agent).ContextBudget() contextmgr.Budget`,
 which the CLI wiring assigns to `harness.Config.Context`.
 
+Every `model.pricing` field (also in fallbacks) may, like `model.name`, be
+exactly `${VAR}`: it is replaced by the environment variable, an unset or empty
+variable is an error (`model.pricing.input_per_mtok: environment variable X is
+not set`), and the expanded value must be a valid decimal amount. Prices depend
+on the model the user picks, so agent files in `agents/` use this form.
+
 Task 1.3 adds `model.fallbacks` and `(*Agent).Prices() map[string]model.Price`.
 
 CLI wiring (task 0.9.2, `internal/cli/wiring.go`, unexported, shared by
