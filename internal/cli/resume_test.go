@@ -40,7 +40,10 @@ func (l *stopAfterLog) Append(ctx context.Context, ev *adlcv1.Event) (*adlcv1.Ev
 func crashedRun(t *testing.T, agent, script, db string, n int) {
 	t.Helper()
 	ctx := context.Background()
-	o := runOptions{agentPath: agent, task: "What does greeting.txt say?", db: db, fakeScript: script}
+	o := runOptions{
+		agentPath: agent, task: "What does greeting.txt say?", db: db, fakeScript: script,
+		startHook: (&hookHarness{}).start,
+	} // agents with hooks must not start real plugins
 	a, err := loadAgent(o)
 	if err != nil {
 		t.Fatal(err)

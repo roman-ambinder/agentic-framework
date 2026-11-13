@@ -22,6 +22,30 @@ type ParsedToolServer struct {
 	DefaultRisk adlcv1.RiskClass
 }
 
+// ParsedHook is a Hook with parsed durations. Zero durations mean the
+// plugin's defaults.
+type ParsedHook struct {
+	Name         string
+	Command      []string
+	Env          map[string]string
+	Dir          string // = Agent.Dir
+	StartTimeout time.Duration
+	CallTimeout  time.Duration
+}
+
+// HookPlugins returns the declared hooks in file order.
+// Call only after Validate succeeded.
+func (a *Agent) HookPlugins() []ParsedHook {
+	out := make([]ParsedHook, 0, len(a.Hooks))
+	for _, h := range a.Hooks {
+		ph := ParsedHook{Name: h.Name, Command: append([]string(nil), h.Command...), Env: h.Env, Dir: a.Dir}
+		ph.StartTimeout, _ = time.ParseDuration(h.StartTimeout)
+		ph.CallTimeout, _ = time.ParseDuration(h.CallTimeout)
+		out = append(out, ph)
+	}
+	return out
+}
+
 // AgentID returns "<name>@<version>".
 func (a *Agent) AgentID() string { return fmt.Sprintf("%s@%d", a.Name, a.Version) }
 

@@ -22,6 +22,8 @@ import (
 // runOptions are the flags of `adlc run`.
 type runOptions struct {
 	agentPath, task, db, fakeScript, runID, modelName string
+	// startHook starts one hook plugin; nil means startPluginHook. Tests set it.
+	startHook hookStarter
 }
 
 func newRunCmd() *cobra.Command {
