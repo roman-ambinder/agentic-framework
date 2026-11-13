@@ -1,0 +1,10 @@
+id: money-split-remainder
+difficulty: easy
+title: Splitting an amount loses a cent
+fixture: ledger
+test_package: money
+hidden_tests:
+  - TestHiddenSplitRemainder
+timeout: 2m
+fix_files:
+  - money/money.go

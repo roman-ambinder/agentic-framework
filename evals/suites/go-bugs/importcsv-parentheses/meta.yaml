@@ -1,0 +1,10 @@
+id: importcsv-parentheses
+difficulty: medium
+title: Card payments imported as deposits
+fixture: ledger
+test_package: importcsv
+hidden_tests:
+  - TestHiddenParenthesesAreNegative
+timeout: 2m
+fix_files:
+  - importcsv/importcsv.go

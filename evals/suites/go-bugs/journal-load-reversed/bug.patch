@@ -1,0 +1,19 @@
+diff --git a/journal/store.go b/journal/store.go
+index 71e62f5..954dfdc 100644
+--- a/journal/store.go
++++ b/journal/store.go
+@@ -103,7 +103,13 @@ func (j *Journal) loadEntry(fe fileEntry) error {
+ 			return err
+ 		}
+ 	}
+-	j.append(date, fe.Memo, postings, fe.Reverses)
++	j.entries = append(j.entries, Entry{
++		ID:       fe.ID,
++		Date:     date,
++		Memo:     fe.Memo,
++		Postings: postings,
++		Reverses: fe.Reverses,
++	})
+ 	return nil
+ }
+ 
