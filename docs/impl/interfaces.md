@@ -587,6 +587,33 @@ const AbandonedOutput = "abandoned: the run stopped while this tool call was run
 const NotRunOutput = "not run: the run stopped before this tool call started. Call it again if it is still needed."
 ```
 
+```go
+// Approvals (task C.1). Approve continues a paused run in place once its last
+// pending approval is resolved; ResolveApproval records one of several.
+type Resolution struct {
+	ApprovalID string
+	Approved   bool
+	By         string // required
+	Comment    string
+}
+func CheckApproval(events []*adlcv1.Event, runID, approvalID string) (*eventlog.RunState, error)
+func ResolveApproval(ctx context.Context, log Log, runID string, res Resolution) (*eventlog.RunState, error)
+func Approve(ctx context.Context, cfg Config, deps Deps, res Resolution) (*eventlog.RunState, error)
+func RejectedOutput(by, comment string) string // "rejected by <by>[: <comment>]"
+var (
+	ErrRunNotPaused     = errors.New("harness: run is not waiting for approval")
+	ErrUnknownApproval  = errors.New("harness: unknown approval")
+	ErrApprovalResolved = errors.New("harness: approval already resolved")
+	ErrContinueRun      = errors.New("harness: last pending approval: the run must be continued with Approve")
+)
+```
+
+`Approve` appends `approval_resolved` (parent = its `approval_requested`); an approved call runs PreTool hooks, the tool and
+PostTool hooks without a second policy check; a rejected call gets an error
+`tool_call_completed` with `RejectedOutput`; the remaining calls of the step
+run normally, then a checkpoint, then the loop. Time spent paused does not
+count against `max_wall_clock`.
+
 `Resume` ignores `cfg.Task` (the task is in `run_started`), only appends events
 (first `run_resumed{next_step, verified_checkpoint_seq, abandoned_tool_calls,
 reason}`, then the recovery events), and continues the same loop as `Run`.

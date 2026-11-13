@@ -372,6 +372,12 @@ func (l *loop) runToolCall(call model.ToolCall) error {
 	if stopped, err := l.authorize(call, tool, reqSeq); stopped || err != nil {
 		return err
 	}
+	return l.execute(call, reqSeq)
+}
+
+// execute runs an authorized call, records tool_call_completed and runs the
+// PostTool hooks. It sets l.final when the run stops.
+func (l *loop) execute(call model.ToolCall, reqSeq uint64) error {
 	res, err := l.callTool(call)
 	if err != nil || l.final != nil {
 		return err
