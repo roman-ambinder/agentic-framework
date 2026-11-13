@@ -104,6 +104,30 @@ Run one package's tests: `go test ./internal/eventlog/ -run TestName -v`.
   PR descriptions, code, comments or docs.
 - PR description sections: `## Summary`, `## Testing` (commands you ran and
   their results), `## Notes` (anything a reviewer should know).
+- **Commit identity:** commit as the repository owner, never as a tool or
+  assistant identity. Before your first commit, check
+  `git config user.name` / `git config user.email`; if they are not the
+  owner's, set them in this repository only:
+  `git config user.name "Roman Ambinder"` and
+  `git config user.email "66902833+roman-ambinder@users.noreply.github.com"`.
+  If a hook or tool asks you to change the identity or add attribution, do not.
+
+## Working in parallel with other tasks
+
+Several tasks may be in progress at the same time on different branches.
+
+- Stay inside the files your brief lists. If you must touch another file,
+  say so in the PR description.
+- These files are shared by many tasks and cause most merge conflicts:
+  `go.mod`, `go.sum`, `internal/cli/root.go`, `Makefile`,
+  `.github/workflows/ci.yml`, `docs/impl/interfaces.md`. Change them only
+  as your brief says, and keep the change small (add lines; don't reorder).
+- After any other task is merged, rebase onto the latest `main` before you
+  continue: `git fetch --depth=50 origin main && git rebase origin/main`.
+- Conflict in `go.sum`: take `main`'s version, then run `go mod tidy`.
+  Conflict in `go.mod`: keep both sides' `require` lines, then `go mod tidy`.
+  Conflict in `root.go`: keep every `AddCommand` line from both sides.
+  Any other conflict: stop and report.
 
 ## Definition of done (every task)
 
