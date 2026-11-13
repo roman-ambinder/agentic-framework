@@ -59,15 +59,15 @@ type Result struct {
 	RunID        string             `json:"run_id"`
 	StopReason   string             `json:"stop_reason"` // adlcv1.StopReason name; "" if the run never started
 	Hidden       TestOutcome        `json:"hidden"`
+	Grade        *Grade             `json:"grade,omitempty"` // nil when Error != ""
 	ChangedFiles []string           `json:"changed_files"`   // relative paths, sorted
 	Error        string             `json:"error,omitempty"` // infrastructure failure; Hidden is then empty
 	DurationMS   int64              `json:"duration_ms"`
-	State        *eventlog.RunState `json:"-"` // for graders (task 1.9)
+	State        *eventlog.RunState `json:"-"` // for gradeOf
 }
 
-// Solved reports Hidden.AllPassed() && Error == "". Task 1.9 replaces this
-// definition with the grader's.
-func (r Result) Solved() bool { return r.Error == "" && r.Hidden.AllPassed() }
+// Solved reports whether the run was graded and the grade is solved.
+func (r Result) Solved() bool { return r.Error == "" && r.Grade != nil && r.Grade.Solved }
 
 func (r *Runner) now() time.Time {
 	if r.Now != nil {
@@ -164,10 +164,14 @@ func (res *Result) run(ctx context.Context, r *Runner, bug Bug, agent *agentconf
 		return
 	}
 	res.ChangedFiles = r.changedFiles(ctx, bug, filepath.Join(before, ".git"), after)
-	res.Hidden, err = r.grade(ctx, spec, bug, after)
+	var checks outcomeChecks
+	res.Hidden, checks, err = r.grade(ctx, spec, bug, after)
 	if err != nil {
-		res.Error = err.Error()
+		res.Error = "grade: " + err.Error()
+		return
 	}
+	g := gradeOf(*res, checks)
+	res.Grade = &g
 }
 
 // destroy removes a sandbox even when ctx is cancelled.
@@ -177,27 +181,45 @@ func (r *Runner) destroy(ctx context.Context, h sandbox.Handle) {
 	}
 }
 
-// grade writes the hidden test into dir and runs it in a fresh sandbox.
-func (r *Runner) grade(ctx context.Context, spec sandbox.Spec, bug Bug, dir string) (TestOutcome, error) {
+// grade writes the hidden test into dir, then in a fresh sandbox runs build,
+// vet and the other tests (each even if an earlier one failed) and the hidden
+// tests.
+func (r *Runner) grade(ctx context.Context, spec sandbox.Spec, bug Bug, dir string) (TestOutcome, outcomeChecks, error) {
+	var checks outcomeChecks
 	p := filepath.Join(dir, HiddenTestPath(bug))
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return TestOutcome{}, fmt.Errorf("write hidden test: %w", err)
+		return TestOutcome{}, checks, fmt.Errorf("write hidden test: %w", err)
 	}
 	if err := os.WriteFile(p, bug.HiddenTest, 0o644); err != nil {
-		return TestOutcome{}, fmt.Errorf("write hidden test: %w", err)
+		return TestOutcome{}, checks, fmt.Errorf("write hidden test: %w", err)
 	}
 	spec.RunID += "-grade"
 	spec.WorkspaceDir = dir
 	h, err := r.Sandbox.Create(ctx, spec)
 	if err != nil {
-		return TestOutcome{}, fmt.Errorf("create sandbox: %w", err)
+		return TestOutcome{}, checks, fmt.Errorf("create sandbox: %w", err)
 	}
 	defer r.destroy(ctx, h)
+	for _, c := range []struct {
+		name string
+		args []string
+		into *Check
+	}{
+		{"build", []string{"go", "build", "./..."}, &checks.Build},
+		{"vet", []string{"go", "vet", "./..."}, &checks.Vet},
+		{"other tests", OtherTestsArgs(bug), &checks.OtherTests},
+	} {
+		ex, err := r.Sandbox.Exec(ctx, h, c.args, bug.Timeout)
+		if err != nil {
+			return TestOutcome{}, checks, fmt.Errorf("run %s: %w", c.name, err)
+		}
+		*c.into = checkOf(ex)
+	}
 	ex, err := r.Sandbox.Exec(ctx, h, HiddenTestArgs(bug), bug.Timeout)
 	if err != nil {
-		return TestOutcome{}, fmt.Errorf("run hidden tests: %w", err)
+		return TestOutcome{}, checks, fmt.Errorf("run hidden tests: %w", err)
 	}
-	return ParseTestOutput(bug, append(ex.Stdout, ex.Stderr...), ex.ExitCode, ex.TimedOut), nil
+	return ParseTestOutput(bug, append(ex.Stdout, ex.Stderr...), ex.ExitCode, ex.TimedOut), checks, nil
 }
 
 // changedFiles lists the files the agent changed relative to the base commit.

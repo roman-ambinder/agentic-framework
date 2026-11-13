@@ -86,6 +86,55 @@ func TestRunOneSolved(t *testing.T) {
 	}
 }
 
+func TestRunOneGradesSolved(t *testing.T) {
+	env := newRunnerEnv(t, fixing)
+	res := env.r.RunOne(context.Background(), env.bug, testAgent(t, "coder", "anthropic"))
+	g := res.Grade
+	if res.Error != "" || g == nil {
+		t.Fatalf("Error = %q, Grade = %+v", res.Error, g)
+	}
+	if !g.Solved || !g.HiddenPass || !g.Build.OK || !g.OtherTests.OK || !g.Vet.OK {
+		t.Errorf("grade = %+v", g)
+	}
+	if g.FilesChanged != 1 || g.TestFilesChanged != 0 {
+		t.Errorf("files = %d, test files = %d", g.FilesChanged, g.TestFilesChanged)
+	}
+}
+
+func TestRunOneFixThatBreaksBuild(t *testing.T) {
+	env := newRunnerEnv(t, func(ctx context.Context, ar AgentRun) (*eventlog.RunState, error) {
+		_, err := ar.Sandbox.Exec(ctx, ar.Handle, []string{"sh", "-c", "printf 'package calc\\nfunc Add(a, b int) int { return a +\\n' > calc/calc.go"}, time.Minute)
+		return completed(), err
+	})
+	res := env.r.RunOne(context.Background(), env.bug, testAgent(t, "coder", "anthropic"))
+	g := res.Grade
+	if res.Error != "" || g == nil {
+		t.Fatalf("Error = %q, Grade = %+v", res.Error, g)
+	}
+	if g.HiddenPass || g.Build.OK || g.Solved || res.Solved() {
+		t.Errorf("grade = %+v", g)
+	}
+	if g.Build.Output == "" {
+		t.Error("failed build has no output")
+	}
+}
+
+func TestRunOneAddedFailingTest(t *testing.T) {
+	env := newRunnerEnv(t, func(ctx context.Context, ar AgentRun) (*eventlog.RunState, error) {
+		cmd := fixCmd + " && printf 'package calc\\nimport \"testing\"\\nfunc TestExtra(t *testing.T) { t.Fatal(\"no\") }\\n' > calc/extra_test.go"
+		_, err := ar.Sandbox.Exec(ctx, ar.Handle, []string{"sh", "-c", cmd}, time.Minute)
+		return completed(), err
+	})
+	res := env.r.RunOne(context.Background(), env.bug, testAgent(t, "coder", "anthropic"))
+	g := res.Grade
+	if res.Error != "" || g == nil {
+		t.Fatalf("Error = %q, Grade = %+v", res.Error, g)
+	}
+	if !g.HiddenPass || g.OtherTests.OK || g.Solved || g.TestFilesChanged != 1 {
+		t.Errorf("grade = %+v", g)
+	}
+}
+
 func TestRunOneChangedFilesSorted(t *testing.T) {
 	env := newRunnerEnv(t, func(ctx context.Context, ar AgentRun) (*eventlog.RunState, error) {
 		_, err := ar.Sandbox.Exec(ctx, ar.Handle, []string{"sh", "-c", "echo z > z.txt && echo a > a.txt && echo m > calc/m.txt"}, time.Minute)
