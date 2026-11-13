@@ -1,0 +1,62 @@
+package sandbox
+
+import (
+	"bytes"
+	"errors"
+	"testing"
+)
+
+func TestSpecValidate(t *testing.T) {
+	valid := Spec{RunID: "r1", Image: "busybox", CPUs: 1.5, MemoryBytes: 1 << 20, Env: map[string]string{"A": "b"}}
+	tests := []struct {
+		name   string
+		spec   Spec
+		reason string
+	}{
+		{"empty run id", Spec{Image: "x"}, "run id is empty"},
+		{"empty image", Spec{RunID: "r"}, "image is empty"},
+		{"negative cpus", Spec{RunID: "r", Image: "x", CPUs: -1}, "cpus must not be negative"},
+		{"negative memory", Spec{RunID: "r", Image: "x", MemoryBytes: -1}, "memory must not be negative"},
+		{"run id checked first", Spec{CPUs: -1}, "run id is empty"},
+		{"valid", valid, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.spec.Validate()
+			if tt.reason == "" {
+				if err != nil {
+					t.Fatalf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrInvalidSpec) {
+				t.Fatalf("Validate() = %v, want ErrInvalidSpec", err)
+			}
+			if want := "sandbox: invalid spec: " + tt.reason; err.Error() != want {
+				t.Fatalf("Validate() = %q, want %q", err.Error(), want)
+			}
+		})
+	}
+}
+
+func TestCapOutput(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		max  int
+		want string
+	}{
+		{"under", "abc", 5, "abc"},
+		{"exact", "abcde", 5, "abcde"},
+		{"over", "abcdefg", 5, "abcde" + TruncatedMarker},
+		{"empty", "", 0, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CapOutput([]byte(tt.in), tt.max)
+			if !bytes.Equal(got, []byte(tt.want)) {
+				t.Fatalf("CapOutput = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

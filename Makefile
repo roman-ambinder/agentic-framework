@@ -16,7 +16,7 @@ LINT     := $(TOOL) golangci-lint
 # Baseline for the schema compatibility check: a git ref or a directory.
 AGAINST  ?= .git\#branch=main
 
-.PHONY: help build test test-race lint fmt tidy tidy-check ci clean \
+.PHONY: help build test test-race test-docker lint fmt tidy tidy-check ci clean \
         proto proto-lint proto-check proto-breaking
 
 help: ## Show this help
@@ -30,6 +30,9 @@ test: ## Run unit tests
 
 test-race: ## Run unit tests with the race detector
 	go test -race ./...
+
+test-docker: ## Run tests that need a Docker daemon
+	go test -race -tags docker -count=1 ./internal/sandbox/...
 
 lint: ## Run golangci-lint
 	$(LINT) run ./...
