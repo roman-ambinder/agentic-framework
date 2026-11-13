@@ -1,0 +1,7 @@
+name: evalagent
+version: 1
+model:
+  provider: fake
+  name: m
+policy:
+  default: deny

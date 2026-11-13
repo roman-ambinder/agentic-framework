@@ -23,6 +23,7 @@ func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	root.AddCommand(newToolCmd())
 	root.AddCommand(newRunCmd())
 	root.AddCommand(newCostCmd())
+	root.AddCommand(newEvalCmd())
 	return root
 }
 
