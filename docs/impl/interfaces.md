@@ -545,6 +545,16 @@ type Deps struct {
 	Policy policy.Client
 	Now    func() time.Time                                  // default time.Now
 	Sleep  func(ctx context.Context, d time.Duration) error // default: timer + ctx
+	// KillSwitch, if set, is asked before every model call and every tool
+	// call whether the run must stop (task C.3). nil = no kill switch.
+	KillSwitch KillSwitch
+}
+
+// KillSwitch says whether a run has been killed; *controlplane.Store implements it.
+type KillSwitch interface {
+	// Killed reports whether the run runID of agent agentID (Config.AgentID,
+	// "name@version") must stop, and why.
+	Killed(ctx context.Context, runID, agentID string) (killed bool, reason string, err error)
 }
 
 // Run executes a new run until it stops and returns its final state.
@@ -682,6 +692,7 @@ where the process stopped; it creates no message in `Transcript`.
 | Policy client returned an error | `ERROR` | `policy: <error>` |
 | Request too large for `Config.Context` (task 1.6.1) | `ERROR` | `context budget exceeded` |
 | `ctx` cancelled | `CANCELLED` | |
+| Kill switch says the run is killed (task C.3) | `CANCELLED` | `killed: <reason>` |
 
 Not a stop: an **unknown tool** (name not in `Tools()`) gets
 `tool_call_requested` with risk UNSPECIFIED and an error `tool_call_completed`
@@ -957,6 +968,33 @@ agentconfig can prefix the field path).
 match `Config.AgentID` exactly (`hello@1`) or by name (`hello`); registry:
 `Ref`, `ParseRef`, `Env`, `ParseEnv`, `AgentVersion`, `Register`, `Version`,
 `Versions`, `Resolve`, `Gate`, `Promotion`, `Promote`.
+
+#### Control plane API (C.3)
+
+```go
+package controlplane
+
+func Open(ctx context.Context, path string, opts ...Option) (*Store, error) // "" and ":memory:" refused
+func WithClock(now func() time.Time) Option
+func (s *Store) Close() error
+
+type Scope string // ScopeRun "run", ScopeAgent "agent", ScopeAll "all"
+type Kill struct {
+	Scope     Scope
+	Target    string // run id, agent name or name@version, "" for all
+	Reason    string
+	CreatedAt time.Time // UTC
+}
+
+func (s *Store) Kill(ctx context.Context, scope Scope, target, reason string) error
+func (s *Store) Unkill(ctx context.Context, scope Scope, target string) error
+func (s *Store) Active(ctx context.Context) ([]Kill, error)
+func (s *Store) Killed(ctx context.Context, runID, agentID string) (bool, string, error)
+
+var ErrSchemaTooNew, ErrInvalidKill, ErrKillNotFound error
+```
+
+Agent kills match `Config.AgentID` exactly (`hello@1`) or by name (`hello` = every version).
 
 ### Evals (`internal/evals`)
 

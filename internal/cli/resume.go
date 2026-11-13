@@ -62,6 +62,7 @@ func newResumeCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&o.agentPath, "agent", "", "agent file the run was started with (same as AGENT_YAML)")
 	f.StringVar(&o.db, "db", defaultDBPath, "event log file")
+	f.StringVar(&o.controlDB, "control-db", defaultControlDBPath, "control database (kill switches)")
 	f.StringVar(&o.fakeScript, "fake-script", "", "fake model script (provider fake only)")
 	f.StringVar(&o.modelName, "model-name", "", "overrides model.name from the agent file")
 	return cmd
@@ -98,6 +99,11 @@ func resumeAgent(ctx context.Context, o runOptions, runID string, stdout io.Writ
 	if err := checkResumable(ctx, store, runID); err != nil {
 		return &exitError{code: 1, err: err}
 	}
+	ks, closeKS, err := openKillSwitch(ctx, o.controlDB)
+	if err != nil {
+		return &exitError{code: 1, err: err}
+	}
+	defer closeKS()
 	if err := attachSandbox(ctx, a, runID, openSandbox); err != nil {
 		return &exitError{code: 1, err: err}
 	}
@@ -106,6 +112,7 @@ func resumeAgent(ctx context.Context, o runOptions, runID string, stdout io.Writ
 		return &exitError{code: 1, err: err}
 	}
 	defer func() { _ = cleanup() }()
+	deps.KillSwitch = ks
 	state, err := harness.Resume(ctx, cfg, deps)
 	if err != nil {
 		return &exitError{code: 1, err: err}
