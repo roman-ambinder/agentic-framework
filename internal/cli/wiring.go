@@ -111,5 +111,6 @@ func harnessConfig(a *agentconfig.Agent, runID, task string) harness.Config {
 		Budget:             a.BudgetProto(),
 		Price:              a.Price(),
 		MaxToolOutputBytes: a.MaxToolOutputBytes,
+		Context:            a.ContextBudget(),
 	}
 }
