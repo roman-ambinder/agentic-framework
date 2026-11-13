@@ -1,0 +1,13 @@
+diff --git a/importcsv/importcsv.go b/importcsv/importcsv.go
+index b6e944d..c94d711 100644
+--- a/importcsv/importcsv.go
++++ b/importcsv/importcsv.go
+@@ -100,7 +100,7 @@ func parseAmount(raw, currency string) (money.Amount, error) {
+ 		return money.Amount{}, err
+ 	}
+ 	if negative {
+-		amt = amt.Neg()
++		amt.Neg()
+ 	}
+ 	return amt, nil
+ }

@@ -1,0 +1,10 @@
+id: ledger-trial-balance-currencies
+difficulty: medium
+title: Trial balance shows EUR twice and says the books don't balance
+fixture: ledger
+test_package: ledger
+hidden_tests:
+  - TestHiddenTrialBalanceMultiCurrency
+timeout: 2m
+fix_files:
+  - ledger/ledger.go

@@ -1,0 +1,10 @@
+id: fx-rate-between-dates
+difficulty: medium
+title: Conversions use a future exchange rate
+fixture: ledger
+test_package: fx
+hidden_tests:
+  - TestHiddenRateBetweenDates
+timeout: 2m
+fix_files:
+  - fx/fx.go

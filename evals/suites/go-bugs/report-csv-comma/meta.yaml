@@ -1,0 +1,10 @@
+id: report-csv-comma
+difficulty: easy
+title: CSV export breaks when a description has a comma
+fixture: ledger
+test_package: report
+hidden_tests:
+  - TestHiddenCSVComma
+timeout: 2m
+fix_files:
+  - report/report.go

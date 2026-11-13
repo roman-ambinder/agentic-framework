@@ -1,0 +1,22 @@
+diff --git b/fx/fx.go a/fx/fx.go
+index 84fb929..036e96c 100644
+--- b/fx/fx.go
++++ a/fx/fx.go
+@@ -94,14 +94,11 @@ func (t *Table) Convert(a money.Amount, to money.Currency, date time.Time) (mone
+ // microsOn returns the micros of the latest rate in rs that is on or before date.
+ // rs must be sorted by date.
+ func microsOn(rs []Rate, from, to money.Currency, date time.Time) (int64, error) {
+-	if len(rs) == 0 {
++	i := sort.Search(len(rs), func(i int) bool { return rs[i].Date.After(date) })
++	if i == 0 {
+ 		return 0, fmt.Errorf("%w: %s to %s on %s", ErrNoRate, from, to, date.Format(dateLayout))
+ 	}
+-	i := sort.Search(len(rs), func(i int) bool { return !rs[i].Date.Before(date) })
+-	if i == len(rs) {
+-		i--
+-	}
+-	return rs[i].Micros, nil
++	return rs[i-1].Micros, nil
+ }
+ 
+ // roundDiv returns n/d rounded half away from zero. d must be positive.

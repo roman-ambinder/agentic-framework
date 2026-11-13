@@ -1,0 +1,20 @@
+diff --git a/money/money.go b/money/money.go
+index 500bb8e..d5649ca 100644
+--- a/money/money.go
++++ b/money/money.go
+@@ -108,13 +108,9 @@ func (a Amount) Split(n int) ([]Amount, error) {
+ 		sign, abs = -1, -abs
+ 	}
+ 	parts := make([]Amount, n)
+-	base, extra := abs/int64(n), abs%int64(n)
++	base := abs / int64(n)
+ 	for i := range parts {
+-		m := base
+-		if int64(i) < extra {
+-			m++
+-		}
+-		parts[i] = Amount{Minor: sign * m, Currency: a.Currency}
++		parts[i] = Amount{Minor: sign * base, Currency: a.Currency}
+ 	}
+ 	return parts, nil
+ }

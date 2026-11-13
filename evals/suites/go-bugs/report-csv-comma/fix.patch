@@ -1,0 +1,13 @@
+diff --git b/report/report.go a/report/report.go
+index 1bba2de..add6ca9 100644
+--- b/report/report.go
++++ a/report/report.go
+@@ -43,7 +43,7 @@ func WriteCSV(w io.Writer, s ledger.Statement) error {
+ 
+ // csvField quotes s if it holds a character that would break a CSV row.
+ func csvField(s string) string {
+-	if !strings.ContainsAny(s, "\"\r\n") {
++	if !strings.ContainsAny(s, ",\"\r\n") {
+ 		return s
+ 	}
+ 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`

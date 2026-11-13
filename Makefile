@@ -17,7 +17,7 @@ LINT     := $(TOOL) golangci-lint
 AGAINST  ?= .git\#branch=main
 
 .PHONY: help build test test-race test-docker lint fmt tidy tidy-check ci clean \
-        proto proto-lint proto-check proto-breaking fixtures-test
+        proto proto-lint proto-check proto-breaking fixtures-test bugs-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-15s %s\n", $$1, $$2}'
@@ -36,6 +36,9 @@ test-docker: ## Run tests that need a Docker daemon
 
 fixtures-test: ## Test the eval fixture repositories
 	cd evals/fixtures/ledger && go vet ./... && go test -count=1 ./...
+
+bugs-check: ## Check every seeded bug (bug applies, hidden test fails, fix works)
+	@for d in evals/suites/go-bugs/*/; do evals/scripts/check-bug.sh "$$(basename "$$d")" || exit 1; done
 
 lint: ## Run golangci-lint
 	$(LINT) run ./...

@@ -1,0 +1,22 @@
+diff --git a/money/money.go b/money/money.go
+index 500bb8e..0181109 100644
+--- a/money/money.go
++++ b/money/money.go
+@@ -58,13 +58,11 @@ func Parse(s string) (Amount, error) {
+ // String formats the amount with exactly two decimals and the currency code, for
+ // example "12.34 EUR", "-0.05 EUR" or "0.00 EUR". Parse reads the result back.
+ func (a Amount) String() string {
+-	sign := ""
+-	abs := uint64(a.Minor)
+-	if a.Minor < 0 {
+-		sign = "-"
+-		abs = uint64(-(a.Minor + 1)) + 1 // also correct for math.MinInt64
++	whole, cents := a.Minor/100, a.Minor%100
++	if cents < 0 {
++		cents = -cents
+ 	}
+-	return fmt.Sprintf("%s%d.%02d %s", sign, abs/100, abs%100, a.Currency)
++	return fmt.Sprintf("%d.%02d %s", whole, cents, a.Currency)
+ }
+ 
+ // Add returns a + b. Both amounts must have the same currency.

@@ -1,0 +1,13 @@
+diff --git b/ledger/statement.go a/ledger/statement.go
+index e1693f3..621b80d 100644
+--- b/ledger/statement.go
++++ a/ledger/statement.go
+@@ -76,7 +76,7 @@ func (l *Ledger) Statement(accountID string, from, to time.Time, in money.Curren
+ 	if err != nil {
+ 		return Statement{}, err
+ 	}
+-	opening, err := p.apply(openRaw, to)
++	opening, err := p.apply(openRaw, before)
+ 	if err != nil {
+ 		return Statement{}, fmt.Errorf("ledger: statement %q: opening: %w", accountID, err)
+ 	}

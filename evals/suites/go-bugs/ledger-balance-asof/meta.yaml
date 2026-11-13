@@ -1,0 +1,10 @@
+id: ledger-balance-asof
+difficulty: medium
+title: Month-end statement misses payments made on the last day
+fixture: ledger
+test_package: ledger
+hidden_tests:
+  - TestHiddenBalanceIncludesAsOfDay
+timeout: 2m
+fix_files:
+  - ledger/ledger.go
