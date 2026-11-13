@@ -283,6 +283,8 @@ const (
 
 func Standard() []Scenario
 func Run(t *testing.T, newAdapter func(t *testing.T, sc Scenario) model.Adapter)
+// CheckResponse ignores ProviderFinish, Provider, Model and Blob.Data, and
+// compares ToolCall.Arguments as JSON values.
 func CheckResponse(t testing.TB, got, want *model.Response)
 func CheckError(t testing.TB, err error, want *model.Error)
 ```
