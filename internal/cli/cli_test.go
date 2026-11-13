@@ -107,10 +107,14 @@ func TestCommandsShareDefaultControlDB(t *testing.T) {
 		"kill":    newKillCmd(),
 		"unkill":  newUnkillCmd(),
 		"kills":   newKillsCmd(),
+		"agent":   newAgentCmd(),
 	}
 	for name, cmd := range cmds {
 		t.Run(name, func(t *testing.T) {
 			f := cmd.Flags().Lookup("control-db")
+			if f == nil {
+				f = cmd.PersistentFlags().Lookup("control-db")
+			}
 			if f == nil {
 				t.Fatal("no --control-db flag")
 			}

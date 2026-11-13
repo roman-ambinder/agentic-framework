@@ -17,7 +17,7 @@ import (
 var ErrSchemaTooNew = errors.New("controlplane: database schema is newer than this binary")
 
 // migrations[i] moves the schema from version i to i+1. Never edit an
-// existing entry; append a new one (task C.4 appends the registry).
+// existing entry; append a new one.
 var migrations = []string{
 	`CREATE TABLE kills (
 		scope             TEXT    NOT NULL CHECK (scope IN ('run', 'agent', 'all')),
@@ -27,6 +27,40 @@ var migrations = []string{
 		PRIMARY KEY (scope, target),
 		CHECK ((scope = 'all') = (target = ''))
 	) WITHOUT ROWID;`,
+	// 2: agent registry (task C.4)
+	`CREATE TABLE agent_versions (
+		name              TEXT    NOT NULL CHECK (name <> ''),
+		version           INTEGER NOT NULL CHECK (version > 0),
+		agent_id          TEXT    NOT NULL,
+		digest            TEXT    NOT NULL UNIQUE,
+		source_dir        TEXT    NOT NULL,
+		created_unix_nano INTEGER NOT NULL,
+		PRIMARY KEY (name, version)
+	) WITHOUT ROWID;
+	CREATE TABLE agent_files (
+		name    TEXT    NOT NULL,
+		version INTEGER NOT NULL,
+		path    TEXT    NOT NULL CHECK (path <> ''),
+		data    BLOB    NOT NULL,
+		PRIMARY KEY (name, version, path)
+	) WITHOUT ROWID;
+	CREATE TABLE promotions (
+		id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+		name               TEXT    NOT NULL,
+		version            INTEGER NOT NULL CHECK (version > 0),
+		env                TEXT    NOT NULL CHECK (env IN ('staging', 'prod')),
+		report_path        TEXT    NOT NULL,
+		pass_at_1          REAL    NOT NULL,
+		runs               INTEGER NOT NULL,
+		median_usd_micros  INTEGER NOT NULL,
+		promoted_unix_nano INTEGER NOT NULL
+	);
+	CREATE TRIGGER agent_versions_no_update BEFORE UPDATE ON agent_versions BEGIN SELECT RAISE(ABORT, 'agent versions are immutable'); END;
+	CREATE TRIGGER agent_versions_no_delete BEFORE DELETE ON agent_versions BEGIN SELECT RAISE(ABORT, 'agent versions are immutable'); END;
+	CREATE TRIGGER agent_files_no_update BEFORE UPDATE ON agent_files BEGIN SELECT RAISE(ABORT, 'agent versions are immutable'); END;
+	CREATE TRIGGER agent_files_no_delete BEFORE DELETE ON agent_files BEGIN SELECT RAISE(ABORT, 'agent versions are immutable'); END;
+	CREATE TRIGGER promotions_no_update BEFORE UPDATE ON promotions BEGIN SELECT RAISE(ABORT, 'promotions are append-only'); END;
+	CREATE TRIGGER promotions_no_delete BEFORE DELETE ON promotions BEGIN SELECT RAISE(ABORT, 'promotions are append-only'); END;`,
 }
 
 // Store is the control database. It is safe for concurrent use, including by

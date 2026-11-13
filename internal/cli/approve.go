@@ -114,7 +114,7 @@ type approveOptions struct {
 func newApproveCmd() *cobra.Command {
 	var o approveOptions
 	cmd := &cobra.Command{
-		Use:   "approve APPROVAL_ID RUN_ID [AGENT_YAML]",
+		Use:   "approve APPROVAL_ID RUN_ID [AGENT_YAML|NAME@N|NAME@ENV]",
 		Short: "Approve or reject a tool call and continue the paused run",
 		Args:  cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -203,6 +203,12 @@ func resolveOnly(ctx context.Context, store *eventlog.Store, runID string, res h
 func continueRun(ctx context.Context, o approveOptions, store *eventlog.Store, runID string, res harness.Resolution,
 	openSandbox func(context.Context) (sandboxLookup, error),
 ) (*eventlog.RunState, error) {
+	ro, cleanupRef, err := resolveAgentRef(ctx, o.runOptions)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupRef()
+	o.runOptions = ro
 	a, err := loadAgent(o.runOptions)
 	if err != nil {
 		return nil, err

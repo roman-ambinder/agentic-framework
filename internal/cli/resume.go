@@ -45,7 +45,7 @@ func openSandboxBackend(ctx context.Context) (sandboxLookup, error) {
 func newResumeCmd() *cobra.Command {
 	var o runOptions
 	cmd := &cobra.Command{
-		Use:   "resume RUN_ID [AGENT_YAML]",
+		Use:   "resume RUN_ID [AGENT_YAML|NAME@N|NAME@ENV]",
 		Short: "Continue a run that stopped without run_completed",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -87,6 +87,11 @@ func resumeAgentPath(positional []string, flag string) (string, error) {
 func resumeAgent(ctx context.Context, o runOptions, runID string, stdout io.Writer,
 	openSandbox func(context.Context) (sandboxLookup, error),
 ) error {
+	o, cleanupRef, err := resolveAgentRef(ctx, o)
+	if err != nil {
+		return &exitError{code: 1, err: err}
+	}
+	defer cleanupRef()
 	a, err := loadAgent(o)
 	if err != nil {
 		return &exitError{code: 1, err: err}

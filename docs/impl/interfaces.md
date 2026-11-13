@@ -719,6 +719,12 @@ func (a *Agent) BudgetProto() *adlcv1.Budget    // nil if no limits
 func (a *Agent) PolicyEngine() *policy.Static
 func (a *Agent) ToolServers() []ParsedToolServer
 func ParseMicroUSD(s string) (int64, error)
+
+const AgentFileName = "agent.yaml"                    // task C.4
+type SourceFile struct{ Path string; Data []byte }     // Agent.Sources: agent file first, then system_file and policy files
+func DigestFiles(files []SourceFile) string            // "sha256:<hex>", algorithm in brief C.4
+func (a *Agent) Digest() string
+func LoadAt(path, workDir string) (*Agent, error)      // Agent.Dir = workDir; system_file relative to the file
 ```
 
 Task 1.6.1 adds the optional `context:` section (`max_input_tokens`,
@@ -905,6 +911,8 @@ const DefaultImage = "golang:1.26"
 Exact field lists: briefs E.3, 1.8 and 1.9. Eval results are stored in the
 JSON report (with run ids), not as events.
 
+`Result.AgentDigest` (`agent_digest`, task C.4) is the digest of the agent file that produced the result.
+
 ## §10 Planned schema additions
 
 | Task | Message | Field | Number |
@@ -995,6 +1003,42 @@ var ErrSchemaTooNew, ErrInvalidKill, ErrKillNotFound error
 ```
 
 Agent kills match `Config.AgentID` exactly (`hello@1`) or by name (`hello` = every version).
+
+#### Agent registry API (C.4)
+
+```go
+package controlplane
+
+type Env string // EnvStaging "staging", EnvProd "prod"
+type Ref struct { Name string; Version int; Env Env } // NAME@N or NAME@ENV
+func ParseRef(s string) (Ref, error)
+func (r Ref) String() string
+func ParseEnv(s string) (Env, error)
+
+type AgentVersion struct {
+	Name string; Version int
+	AgentID, Digest, SourceDir string
+	CreatedAt time.Time
+	Envs  []Env                    // environments whose current version this is
+	Files []agentconfig.SourceFile // nil from Versions
+}
+func (v AgentVersion) Ref() string // "name@N"
+
+func (s *Store) Register(ctx context.Context, a *agentconfig.Agent) (v AgentVersion, created bool, err error)
+func (s *Store) Version(ctx context.Context, name string, version int) (AgentVersion, error)
+func (s *Store) Versions(ctx context.Context) ([]AgentVersion, error)
+func (s *Store) Resolve(ctx context.Context, ref Ref) (AgentVersion, error)
+
+type Gate struct { MinPassAt1 float64; MaxMedianUSDMicros int64 } // < 0 = no cost limit
+type Promotion struct {
+	Name string; Version int; Env Env; ReportPath string
+	PassAt1 float64; Runs int; MedianUSDMicros int64; PromotedAt time.Time
+}
+func (s *Store) Promote(ctx context.Context, name string, version int, env Env,
+	rep evals.Report, reportPath string, g Gate) (Promotion, error)
+
+var ErrInvalidRef, ErrInvalidAgent, ErrVersionNotFound, ErrNotPromoted, ErrReportMismatch, ErrPromotionRefused error
+```
 
 ### Evals (`internal/evals`)
 
