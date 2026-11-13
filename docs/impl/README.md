@@ -82,7 +82,7 @@ A task can start once everything in "Depends on" is merged.
 | G.3 | [CLI consistency](tasks/G-gaps.md#g3--cli-consistency) | S | — |
 | G.4 | [Context manager memory keyed by position](tasks/G-gaps.md#g4--context-manager-memory-keyed-by-position) | S | — |
 
-M2 and later are planned at gate G1 (work plan §5) and get briefs then.
+M2 (both options, briefed before gate G1): see [m2.md](m2.md). M3 and later are planned after M2.
 
 ## Brief template
 
