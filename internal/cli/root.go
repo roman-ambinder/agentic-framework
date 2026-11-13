@@ -28,6 +28,7 @@ func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	root.AddCommand(newEvalReportCmd())
 	root.AddCommand(newResumeCmd())
 	root.AddCommand(newEvalCompareCmd())
+	root.AddCommand(newPolicyCmd())
 	return root
 }
 

@@ -371,11 +371,13 @@ type Client interface {
 // AllowAll allows everything. Tests only.
 type AllowAll struct{}
 
-// Rule matches on risk class and (optionally) tool name. First match wins.
+// Rule matches on risk class, tool name glob and (optionally) arguments.
+// All given conditions must hold. First match wins.
 type Rule struct {
 	ID       string
-	Risk     adlcv1.RiskClass // UNSPECIFIED = any risk
-	Tool     string           // "" = any tool; exact match otherwise
+	Risk     adlcv1.RiskClass       // UNSPECIFIED = any risk
+	Tool     string                 // "" = any tool; otherwise a glob (a plain name matches exactly)
+	Args     map[string]ArgMatcher  // nil = any arguments; every entry must match
 	Decision adlcv1.Decision
 }
 
@@ -388,6 +390,17 @@ type Static struct {
 // NewStatic validates the rules (ids non-empty, unique, not "default";
 // decisions set; def set) and returns a Static holding a copy of rules.
 func NewStatic(rules []Rule, def adlcv1.Decision) (*Static, error)
+
+// ArgMatcher (task C.2): exactly one of Glob, Prefix, Regex, In; matches a
+// top-level JSON string argument; missing or non-string never matches.
+type ArgMatcher struct {
+	Glob   string   // "*" no "/", "**" anything, "?" one char not "/"; [ ] { } \ rejected
+	Prefix string
+	Regex  string   // whole value: ^(?:Regex)$
+	In     []string
+}
+func (m ArgMatcher) Check() error // error text has no "policy:" prefix
+func CheckGlob(glob string) error // same
 
 // Names used in agent.yaml (task 0.9.1).
 var ErrUnknownName = errors.New("policy: unknown name")
@@ -673,6 +686,11 @@ func ParseMicroUSD(s string) (int64, error)
 Task 1.6.1 adds the optional `context:` section (`max_input_tokens`,
 `keep_recent_steps`, both >= 0) and `(*Agent).ContextBudget() contextmgr.Budget`,
 which the CLI wiring assigns to `harness.Config.Context`.
+
+Task C.2 adds `policy.include` (policy files, `PolicyFile{include, rules}`, paths relative to the naming file, no
+`default`), `args` matchers and tool globs in rules, and
+`Policy.Included []IncludedRule`; `PolicyEngine` evaluates included rules
+(depth first, each file once) before the agent's rules.
 
 Every `model.pricing` field (also in fallbacks) may, like `model.name`, be
 exactly `${VAR}`: it is replaced by the environment variable, an unset or empty

@@ -102,18 +102,45 @@ type Context struct {
 	KeepRecentSteps int   `yaml:"keep_recent_steps"` // 0 = 2
 }
 
-// Policy is the static policy: a default decision and ordered rules.
+// Policy is the agent's policy: a default decision, included policy files and ordered rules.
 type Policy struct {
-	Default string `yaml:"default"`
-	Rules   []Rule `yaml:"rules"`
+	Default string   `yaml:"default"`
+	Include []string `yaml:"include"` // policy files, relative to the agent file
+	Rules   []Rule   `yaml:"rules"`
+	// Included holds the rules of the included files in evaluation order,
+	// filled by Load and Parse. Not in YAML.
+	Included []IncludedRule `yaml:"-"`
 }
 
 // Rule is one policy rule; the first match wins.
 type Rule struct {
-	ID       string `yaml:"id"`
-	Risk     string `yaml:"risk"`
-	Tool     string `yaml:"tool"`
-	Decision string `yaml:"decision"`
+	ID       string                `yaml:"id"`
+	Risk     string                `yaml:"risk"`
+	Tool     string                `yaml:"tool"`
+	Args     map[string]ArgMatcher `yaml:"args"`
+	Decision string                `yaml:"decision"`
+}
+
+// ArgMatcher is policy.ArgMatcher in YAML: exactly one key.
+type ArgMatcher struct {
+	Glob   string   `yaml:"glob"`
+	Prefix string   `yaml:"prefix"`
+	Regex  string   `yaml:"regex"`
+	In     []string `yaml:"in"`
+}
+
+// PolicyFile is a reusable policy file named by policy.include. It has no
+// default: the default decision comes only from the agent file.
+type PolicyFile struct {
+	Include []string `yaml:"include"` // relative to this file
+	Rules   []Rule   `yaml:"rules"`
+}
+
+// IncludedRule is a rule read from a policy file.
+type IncludedRule struct {
+	File  string // the policy file's path as resolved (see include.go)
+	Index int    // position in that file's rules
+	Rule  Rule
 }
 
 // Load reads, decodes (strict), applies defaults and validates the file.
@@ -181,6 +208,7 @@ func (a *Agent) resolve() error {
 		expandModel(&p, fmt.Sprintf("model.fallbacks[%d]", i), &a.Model.Fallbacks[i])
 	}
 	a.resolveSystemFile(&p)
+	a.resolvePolicyIncludes(&p)
 	return errors.Join(p...)
 }
 
