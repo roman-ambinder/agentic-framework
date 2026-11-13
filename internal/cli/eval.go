@@ -45,7 +45,7 @@ func newEvalCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringSliceVar(&o.agents, "agents", nil, "agent files, comma separated (required)")
 	f.StringSliceVar(&o.bugs, "bugs", nil, "only these bug ids, comma separated (default: all)")
-	f.StringVar(&o.db, "db", ".adlc/events.db", "event log file")
+	f.StringVar(&o.db, "db", defaultDBPath, "event log file")
 	f.StringVar(&o.out, "out", "", "report path (default: evals/results/<suite>-<UTC time>.json)")
 	f.StringVar(&o.workDir, "workdir", "", "host directory for workspaces (default: a new temporary directory)")
 	f.StringVar(&o.image, "image", evals.DefaultImage, "sandbox image")

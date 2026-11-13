@@ -11,9 +11,6 @@ import (
 	"github.com/roman-ambinder/agentic-framework/internal/observability"
 )
 
-// traceDBDefault is the default --db of `adlc trace`; it equals the default of `adlc run`.
-const traceDBDefault = ".adlc/events.db"
-
 func newTraceCmd() *cobra.Command {
 	var db string
 	var otelStdout bool
@@ -29,7 +26,7 @@ func newTraceCmd() *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&db, "db", traceDBDefault, "event log file")
+	f.StringVar(&db, "db", defaultDBPath, "event log file")
 	f.BoolVar(&otelStdout, "otel-stdout", false, "print OpenTelemetry spans as JSON instead of the tree")
 	return cmd
 }

@@ -39,7 +39,7 @@ func newRunCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&o.task, "task", "", "first user message (required)")
-	f.StringVar(&o.db, "db", ".adlc/events.db", "event log file")
+	f.StringVar(&o.db, "db", defaultDBPath, "event log file")
 	f.StringVar(&o.fakeScript, "fake-script", "", "fake model script (provider fake only)")
 	f.StringVar(&o.runID, "run-id", "", "run id (default: generated)")
 	f.StringVar(&o.modelName, "model-name", "", "overrides model.name from the agent file")
