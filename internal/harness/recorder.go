@@ -16,6 +16,8 @@ type recorder struct {
 	agentID string
 	events  []*adlcv1.Event   // every event appended, as stored
 	state   eventlog.RunState // events applied in order
+
+	modelCalls int // model_call_completed events recorded
 }
 
 func newRecorder(parent context.Context, log Log, runID, agentID string) *recorder {
@@ -36,5 +38,8 @@ func (r *recorder) add(ev *adlcv1.Event) (uint64, error) {
 		return 0, err
 	}
 	r.events = append(r.events, stored)
+	if stored.GetModelCallCompleted() != nil {
+		r.modelCalls++
+	}
 	return stored.GetSeq(), nil
 }

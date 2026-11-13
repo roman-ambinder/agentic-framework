@@ -39,6 +39,8 @@ type Config struct {
 	Budget             *adlcv1.Budget
 	Price              model.Price
 	MaxToolOutputBytes int // 0 = toolrouter.DefaultMaxModelBytes
+	Retry              RetryPolicy
+	Hooks              []Hook
 }
 
 // Deps are the run's collaborators.
@@ -94,7 +96,7 @@ func validate(cfg Config, deps Deps) error {
 	case deps.Policy == nil:
 		return errors.New("harness: deps: policy is nil")
 	}
-	return nil
+	return validateHooks(cfg.Hooks)
 }
 
 // sleepCtx waits for d, or returns ctx.Err() if ctx ends first.
