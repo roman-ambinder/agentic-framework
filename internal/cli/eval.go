@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	adlcv1 "github.com/roman-ambinder/agentic-framework/gen/go/adlc/v1"
 	"github.com/roman-ambinder/agentic-framework/internal/agentconfig"
 	"github.com/roman-ambinder/agentic-framework/internal/evals"
 	"github.com/roman-ambinder/agentic-framework/internal/eventlog"
@@ -197,6 +198,15 @@ func evalWorkDir(o evalOptions) (string, func(), error) {
 	return dir, func() { _ = os.RemoveAll(dir) }, nil
 }
 
+// evalSandboxImage maps the image an eval sandbox runs to the value recorded
+// in run_started; nil when the runner gave no image reference.
+func evalSandboxImage(ar evals.AgentRun) *adlcv1.SandboxImage {
+	if ar.ImageRef == "" {
+		return nil
+	}
+	return &adlcv1.SandboxImage{Ref: ar.ImageRef, Id: ar.ImageID}
+}
+
 // evalRunAgent returns the RunAgent that runs the real harness with the
 // sandbox tools. Model, config and policy come from the same helpers as
 // `adlc run`.
@@ -215,6 +225,7 @@ func evalRunAgent(log harness.Log) func(context.Context, evals.AgentRun) (*event
 			return nil, err
 		}
 		cfg := harnessConfig(a, ar.RunID, ar.Bug.Issue)
+		cfg.SandboxImage = evalSandboxImage(ar)
 		tools, err := sandboxset.NewRouter(ctx, sandboxtool.Options{Sandbox: ar.Sandbox, Handle: ar.Handle})
 		if err != nil {
 			return nil, fmt.Errorf("eval: start sandbox tools: %w", err)
