@@ -23,9 +23,13 @@ C.1–C.4 and Q.1–Q.2 are on `main` (PR #11); Q.3–Q.5 are on `integration`.
 
 ## Unreleased — proposed v0.2.0
 
-Everything below is merged on `main`. Gates G0 (a real model through the
-loop) and G1 (live eval results) have not been run yet; tag once they have,
-or tag `v0.2.0-rc.1` now.
+Everything below is merged on `main`. Gate G0 (a real model through the
+loop) passed on 2026-11-14; G1 (live eval results) has not been run yet;
+tag once it has, or tag `v0.2.0-rc.1` now.
+
+### Fixed
+- Anthropic adapter: a tool without input properties was sent with no
+  `input_schema`, which the API rejects (found by gate G0's live tests).
 
 ### Agent loop and state (M0)
 - Append-only SQLite event log with a validated fold to run state and a stable state digest (0.3).
