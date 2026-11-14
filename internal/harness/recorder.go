@@ -31,7 +31,7 @@ func newRecorderFrom(ctx context.Context, log Log, runID, agentID string, events
 	r.events = events
 	r.state = state
 	for _, ev := range events {
-		if ev.GetModelCallCompleted() != nil {
+		if countsAsStep(ev) {
 			r.modelCalls++
 		}
 	}
@@ -52,8 +52,15 @@ func (r *recorder) add(ev *adlcv1.Event) (uint64, error) {
 		return 0, err
 	}
 	r.events = append(r.events, stored)
-	if stored.GetModelCallCompleted() != nil {
+	if countsAsStep(stored) {
 		r.modelCalls++
 	}
 	return stored.GetSeq(), nil
+}
+
+// countsAsStep reports whether ev is the end of a model step: a
+// model_call_completed that is not the planning call (task Q.4).
+func countsAsStep(ev *adlcv1.Event) bool {
+	mc := ev.GetModelCallCompleted()
+	return mc != nil && mc.GetCallId() != PlanCallID
 }

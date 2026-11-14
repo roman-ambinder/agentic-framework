@@ -12,6 +12,15 @@ model:
     output_per_mtok: "7.50"
     cache_read_per_mtok: "0.15"
     cache_write_per_mtok: "1.875"
+  # roles:                        # optional (task Q.5): a model per step role
+  #   plan:                       # the planning call; "act" is always the primary model
+  #     provider: openai          # required; fake, anthropic, openai
+  #     name: ${ADLC_OPENAI_MODEL}  # required; may be exactly ${VAR}
+  #     effort: low               # optional; "" = the adapter's default
+  #     pricing:                  # optional; same fields as model.pricing
+  #       input_per_mtok: "1"
+  #       output_per_mtok: "2"
+  #     # max_tokens, fallbacks and roles are not allowed here
 system: |
   You are a careful assistant. Use the tools to answer.
 # system_file: prompt.md          # optional; instead of system: read the prompt from this file,
@@ -35,6 +44,10 @@ budget:                           # optional; 0 or missing = no limit
 context:                          # optional; limits the size of each model request
   max_input_tokens: 150000        # optional; >= 0; default derived from the model (80% of its window)
   keep_recent_steps: 2            # optional; >= 0; default 2
+planning:                         # optional; omitted = no planning call before step 1
+  enabled: false                  # default false
+  prompt: ""                      # optional; "" = the harness default plan prompt
+  max_tokens: 0                   # optional; 0 = harness default (1024); 0..1000000
 policy:
   default: deny                   # required; allow, deny, needs_approval
   rules:                          # optional; first match wins

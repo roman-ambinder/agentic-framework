@@ -31,6 +31,7 @@ type Agent struct {
 	Tools              []ToolServer `yaml:"tools"`
 	Budget             Budget       `yaml:"budget"`
 	Context            Context      `yaml:"context"`
+	Planning           Planning     `yaml:"planning"`
 	Policy             Policy       `yaml:"policy"`
 	Hooks              []Hook       `yaml:"hooks"`
 	// Sandbox, if set, makes `adlc run` create a sandbox for the run.
@@ -62,6 +63,15 @@ type Model struct {
 	// Fallbacks are tried in order when the primary fails with a retryable
 	// error (task 1.3). A fallback has no fallbacks of its own.
 	Fallbacks []Model `yaml:"fallbacks"`
+	// Roles is only allowed on the primary model (task Q.5).
+	Roles Roles `yaml:"roles"`
+}
+
+// Roles holds a model per step role (task Q.5). Role "act" (every normal step)
+// always uses the primary model and its fallbacks. A nil entry means the role
+// uses the primary model.
+type Roles struct {
+	Plan *Model `yaml:"plan"` // the planning call (task Q.4)
 }
 
 // Pricing holds USD per million tokens as decimal strings.
@@ -104,6 +114,13 @@ type Budget struct {
 type Context struct {
 	MaxInputTokens  int64 `yaml:"max_input_tokens"`  // 0 = derived from the model
 	KeepRecentSteps int   `yaml:"keep_recent_steps"` // 0 = 2
+}
+
+// Planning configures the optional planning call (task Q.4). Off by default.
+type Planning struct {
+	Enabled   bool   `yaml:"enabled"`
+	Prompt    string `yaml:"prompt"`     // "" = the harness default
+	MaxTokens int    `yaml:"max_tokens"` // 0 = the harness default
 }
 
 // Policy is the agent's policy: a default decision, included policy files and ordered rules.
@@ -213,13 +230,16 @@ func (a *Agent) resolve() error {
 	for i := range a.Model.Fallbacks {
 		expandModel(&p, fmt.Sprintf("model.fallbacks[%d]", i), &a.Model.Fallbacks[i])
 	}
+	if r := a.Model.Roles.Plan; r != nil {
+		expandModel(&p, "model.roles.plan", r)
+	}
 	a.resolveSystemFile(&p)
 	a.resolvePolicyIncludes(&p)
 	return errors.Join(p...)
 }
 
 // expandModel expands the name and every pricing field of m. path is "model"
-// or "model.fallbacks[i]".
+// "model.fallbacks[i]" or "model.roles.plan".
 func expandModel(p *problems, path string, m *Model) {
 	expandName(p, path+".name", &m.Name)
 	pr := &m.Pricing

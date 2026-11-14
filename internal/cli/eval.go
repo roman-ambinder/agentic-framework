@@ -210,12 +210,16 @@ func evalRunAgent(log harness.Log) func(context.Context, evals.AgentRun) (*event
 		if err != nil {
 			return nil, err
 		}
+		pm, err := buildPlanModel(a, "")
+		if err != nil {
+			return nil, err
+		}
 		cfg := harnessConfig(a, ar.RunID, ar.Bug.Issue)
 		tools, err := sandboxset.NewRouter(ctx, sandboxtool.Options{Sandbox: ar.Sandbox, Handle: ar.Handle})
 		if err != nil {
 			return nil, fmt.Errorf("eval: start sandbox tools: %w", err)
 		}
 		defer func() { _ = tools.Close() }()
-		return harness.Run(ctx, cfg, harness.Deps{Log: log, Model: m, Tools: tools, Policy: a.PolicyEngine()})
+		return harness.Run(ctx, cfg, harness.Deps{Log: log, Model: m, PlanModel: pm, Tools: tools, Policy: a.PolicyEngine()})
 	}
 }

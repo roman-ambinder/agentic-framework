@@ -492,3 +492,58 @@ func TestResumeTwice(t *testing.T) {
 		t.Fatalf("model saw %+v", got)
 	}
 }
+
+func TestResumeAfterPlanContinuesAtStep1(t *testing.T) {
+	cfg := planConfig()
+	store := crashRun(t, 3, cfg, resumeDeps(t), planTurn(), textTurn("ok"))
+	r := resumeOK(t, store, cfg, resumeDeps(t), textTurn("ok"))
+	wantKinds(t, r.tail, "run_resumed", "model_call_started", "model_call_completed", "run_completed")
+	if rr := r.tail[0].GetRunResumed(); rr.GetNextStep() != 1 {
+		t.Fatalf("next_step = %d, want 1", rr.GetNextStep())
+	}
+	if s := r.tail[1].GetModelCallStarted(); s.GetCallId() != "m1" {
+		t.Fatalf("tail call = %v", s)
+	}
+	if m := r.model.Requests()[0].Messages; len(m) != 3 || m[1].Text() != "1. read a.go" {
+		t.Fatalf("messages = %q", msgTexts(m))
+	}
+	wantStop(t, r.state, stopCompleted, "")
+	if r.state.Result != "ok" {
+		t.Fatalf("result = %q", r.state.Result)
+	}
+}
+
+func TestResumeDuringPlanRepeatsPlan(t *testing.T) {
+	cfg := planConfig()
+	store := crashRun(t, 2, cfg, resumeDeps(t), planTurn(), textTurn("ok"))
+	r := resumeOK(t, store, cfg, resumeDeps(t), planTurn(), textTurn("ok"))
+	wantKinds(t, r.tail, "run_resumed", "model_call_started", "model_call_completed",
+		"model_call_started", "model_call_completed", "run_completed")
+	p, m := r.tail[1].GetModelCallStarted(), r.tail[3].GetModelCallStarted()
+	if p.GetCallId() != PlanCallID || p.GetStep() != 0 || m.GetCallId() != "m1" {
+		t.Fatalf("tail calls = %v, %v", p, m)
+	}
+	if rr := r.tail[0].GetRunResumed(); rr.GetNextStep() != 1 {
+		t.Fatalf("next_step = %d, want 1", rr.GetNextStep())
+	}
+}
+
+func TestResumeAfterStep1DoesNotReplan(t *testing.T) {
+	cfg := planConfig()
+	turns := append([]model.FakeTurn{planTurn()}, twoReads()...)
+	store := crashRun(t, 5, cfg, resumeDeps(t), turns...)
+	r := resumeOK(t, store, cfg, resumeDeps(t), twoReads()[1:]...)
+	for _, ev := range r.tail {
+		if ev.GetModelCallStarted().GetCallId() == PlanCallID || ev.GetModelCallCompleted().GetCallId() == PlanCallID {
+			t.Fatal("Resume planned again")
+		}
+	}
+	wantStop(t, r.state, stopCompleted, "")
+}
+
+// Planning off in the resuming config never adds a plan to a run without one.
+func TestResumeWithoutPlanDoesNotPlan(t *testing.T) {
+	store := crashRun(t, 2, baseConfig(), resumeDeps(t), textTurn("ok"))
+	r := resumeOK(t, store, baseConfig(), resumeDeps(t), textTurn("ok"))
+	wantKinds(t, r.tail, "run_resumed", "model_call_started", "model_call_completed", "run_completed")
+}

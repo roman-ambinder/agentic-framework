@@ -86,6 +86,11 @@ func (l *loop) run() (*eventlog.RunState, error) {
 		return nil, err
 	}
 	l.loadTools()
+	if l.cfg.Plan.Enabled {
+		if err := l.runPlanCall(); err != nil || l.final != nil {
+			return l.final, err
+		}
+	}
 	return l.steps(1)
 }
 
@@ -182,7 +187,7 @@ func (l *loop) step(step uint32) error {
 		return err
 	}
 	callID := fmt.Sprintf("m%d", step)
-	resp, err := l.callModel(req, callID, step)
+	resp, err := l.callModel(l.deps.Model, req, callID, step)
 	if err != nil || resp == nil {
 		return err
 	}
@@ -219,7 +224,7 @@ func (l *loop) compact(req *model.Request) (*model.Request, error) {
 // callModel calls the model, retrying retryable failures as Config.Retry says.
 // Every attempt writes model_call_started. It returns a nil response, and sets
 // l.final, when the call failed for good or was cancelled.
-func (l *loop) callModel(req *model.Request, callID string, step uint32) (*model.Response, error) {
+func (l *loop) callModel(ad model.Adapter, req *model.Request, callID string, step uint32) (*model.Response, error) {
 	p := l.cfg.Retry.withDefaults()
 	for attempt := 1; ; attempt++ {
 		if attempt > 1 {
@@ -227,7 +232,7 @@ func (l *loop) callModel(req *model.Request, callID string, step uint32) (*model
 				return nil, err
 			}
 		}
-		resp, genErr, err := l.attemptModel(req, callID, step, attempt)
+		resp, genErr, err := l.attemptModel(ad, req, callID, step, attempt)
 		if err != nil {
 			return nil, err
 		}
@@ -242,9 +247,9 @@ func (l *loop) callModel(req *model.Request, callID string, step uint32) (*model
 
 // attemptModel records model_call_started and calls the model once. genErr is
 // the model's error; err is a failure to use the event log.
-func (l *loop) attemptModel(req *model.Request, callID string, step uint32, attempt int) (resp *model.Response, genErr, err error) {
+func (l *loop) attemptModel(ad model.Adapter, req *model.Request, callID string, step uint32, attempt int) (resp *model.Response, genErr, err error) {
 	startSeq, err := l.add(&adlcv1.Event{Payload: &adlcv1.Event_ModelCallStarted{ModelCallStarted: &adlcv1.ModelCallStarted{
-		CallId: callID, Step: step, Provider: l.deps.Model.Provider(), Model: l.cfg.Model,
+		CallId: callID, Step: step, Provider: ad.Provider(), Model: req.Model,
 		Attempt: uint32(attempt), //nolint:gosec // attempt is small
 	}}})
 	if err != nil {
@@ -252,7 +257,7 @@ func (l *loop) attemptModel(req *model.Request, callID string, step uint32, atte
 	}
 	l.startSeq = startSeq
 	l.t0 = l.deps.Now()
-	resp, genErr = l.deps.Model.Generate(l.callCtx, req)
+	resp, genErr = ad.Generate(l.callCtx, req)
 	return resp, genErr, nil
 }
 

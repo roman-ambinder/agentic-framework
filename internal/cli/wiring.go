@@ -92,6 +92,10 @@ func buildRun(ctx context.Context, a *agentconfig.Agent, o runOptions, runID str
 	if err != nil {
 		return cfg, deps, nil, err
 	}
+	pm, err := buildPlanModel(a, o.fakeScript)
+	if err != nil {
+		return cfg, deps, nil, err
+	}
 	servers, err := toServerConfigs(a.ToolServers())
 	if err != nil {
 		return cfg, deps, nil, err
@@ -115,7 +119,7 @@ func buildRun(ctx context.Context, a *agentconfig.Agent, o runOptions, runID str
 	}
 	cfg = harnessConfig(a, runID, o.task)
 	cfg.Hooks = hooks
-	deps = harness.Deps{Log: log, Model: m, Tools: router, Policy: a.PolicyEngine()}
+	deps = harness.Deps{Log: log, Model: m, PlanModel: pm, Tools: router, Policy: a.PolicyEngine()}
 	return cfg, deps, func() error { return errors.Join(closeHooks(), router.Close()) }, nil
 }
 
@@ -142,6 +146,16 @@ func buildModel(a *agentconfig.Agent, fakeScript string) (model.Adapter, error) 
 		return nil, err
 	}
 	return r, nil
+}
+
+// buildPlanModel returns the adapter for model.roles.plan, or nil when the
+// agent has no plan role (the plan call then uses the primary model).
+func buildPlanModel(a *agentconfig.Agent, fakeScript string) (model.Adapter, error) {
+	r := a.Model.Roles.Plan
+	if r == nil {
+		return nil, nil
+	}
+	return buildAdapter(r.Provider, fakeScript)
 }
 
 // buildAdapter returns the adapter for one provider name.
@@ -204,7 +218,7 @@ func toServerConfigs(in []agentconfig.ParsedToolServer) ([]mcprouter.ServerConfi
 
 // harnessConfig maps an agent definition to a harness config.
 func harnessConfig(a *agentconfig.Agent, runID, task string) harness.Config {
-	return harness.Config{
+	cfg := harness.Config{
 		RunID:              runID,
 		AgentID:            a.AgentID(),
 		AgentVersion:       a.AgentID(),
@@ -218,5 +232,10 @@ func harnessConfig(a *agentconfig.Agent, runID, task string) harness.Config {
 		Prices:             a.Prices(),
 		MaxToolOutputBytes: a.MaxToolOutputBytes,
 		Context:            a.ContextBudget(),
+		Plan:               harness.PlanConfig{Enabled: a.Planning.Enabled, Prompt: a.Planning.Prompt, MaxTokens: a.Planning.MaxTokens},
 	}
+	if r := a.Model.Roles.Plan; r != nil {
+		cfg.Plan.Model, cfg.Plan.Effort = r.Name, r.Effort
+	}
+	return cfg
 }
