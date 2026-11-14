@@ -21,7 +21,9 @@ func writeAgentReport(t *testing.T, agent string, results ...evals.Result) strin
 	}
 	for i := range results {
 		results[i].AgentDigest = a.Digest()
-		results[i].Provider = "fake"
+		if results[i].Provider == "" {
+			results[i].Provider = "fake"
+		}
 		results[i].Difficulty = evals.Easy
 	}
 	path := filepath.Join(t.TempDir(), "report.json")
@@ -297,5 +299,33 @@ func TestAgentPromotePrintsImage(t *testing.T) {
 				t.Fatalf("%d %q %q", code, out, e)
 			}
 		})
+	}
+}
+
+func TestAgentPromoteImageWarningCountsAllProviders(t *testing.T) {
+	agent, _, _ := helloDir(t, "")
+	cdb := registerHello(t, agent)
+	var rs []evals.Result
+	for _, prov := range []string{"p1", "p2"} {
+		for range 3 {
+			rs = append(rs, evals.Result{Provider: prov, Grade: &evals.Grade{Solved: true}})
+		}
+	}
+	rep := writeAgentReport(t, agent, rs...)
+	code, out, e := runCLI("agent", "promote", "hello@1", "--to", "staging", "--report", rep, "--control-db", cdb)
+	if code != 0 || !strings.Contains(out, "warning: the report does not say which image the results used\n") {
+		t.Fatalf("%d %q %q", code, out, e)
+	}
+	rs = nil
+	for _, prov := range []string{"p1", "p2"} {
+		for range 3 {
+			rs = append(rs, evals.Result{Provider: prov, Grade: &evals.Grade{Solved: true}})
+		}
+	}
+	rs[0].ImageID = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	rep = writeAgentReport(t, agent, rs...)
+	code, out, e = runCLI("agent", "promote", "hello@1", "--to", "prod", "--report", rep, "--control-db", cdb)
+	if code != 0 || !strings.HasSuffix(out, "warning: 5 of 6 results do not say which image they used\n") {
+		t.Fatalf("%d %q %q", code, out, e)
 	}
 }

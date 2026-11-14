@@ -236,6 +236,6 @@ func printPromotionImage(w io.Writer, p controlplane.Promotion) {
 	}
 	fmt.Fprintf(w, "image: %s\n", sandbox.ShortImageID(p.ImageID))
 	if p.ResultsWithoutImage > 0 {
-		fmt.Fprintf(w, "warning: %d of %d results do not say which image they used\n", p.ResultsWithoutImage, p.Runs)
+		fmt.Fprintf(w, "warning: %d of %d results do not say which image they used\n", p.ResultsWithoutImage, p.ResultsChecked)
 	}
 }

@@ -217,3 +217,25 @@ func TestPromoteRecordsImageID(t *testing.T) {
 		t.Fatalf("image_id = %q, %v; want %q", got, err, imgA)
 	}
 }
+
+func TestPromoteResultsCheckedCountsAllProviders(t *testing.T) {
+	s, a := promoteEnv(t)
+	d := a.Digest()
+	var rs []evals.Result
+	for _, prov := range []string{"p1", "p2"} {
+		for range 3 {
+			r := solved(d, 0)
+			r.Provider = prov
+			rs = append(rs, r)
+		}
+	}
+	rs = append(rs, errored(d))
+	rs[0].ImageID = imgA
+	p, err := s.Promote(context.Background(), "hello", 1, EnvStaging, report(rs...), "r.json", noCostLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ResultsWithoutImage != 5 || p.ResultsChecked != 6 {
+		t.Errorf("ResultsWithoutImage %d, ResultsChecked %d; want 5, 6", p.ResultsWithoutImage, p.ResultsChecked)
+	}
+}

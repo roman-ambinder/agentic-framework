@@ -1144,7 +1144,7 @@ type Gate struct { MinPassAt1 float64; MaxMedianUSDMicros int64 } // < 0 = no co
 type Promotion struct {
 	Name string; Version int; Env Env; ReportPath string
 	PassAt1 float64; Runs int; MedianUSDMicros int64; PromotedAt time.Time
-	ImageID string; ResultsWithoutImage int // Promote refuses results (Error == "") on 2+ images
+	ImageID string; ResultsWithoutImage, ResultsChecked int // Promote refuses results (Error == "") on 2+ images
 }
 func (s *Store) Promote(ctx context.Context, name string, version int, env Env,
 	rep evals.Report, reportPath string, g Gate) (Promotion, error)
