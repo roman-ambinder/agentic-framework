@@ -65,6 +65,7 @@ func newResumeCmd() *cobra.Command {
 	f.StringVar(&o.controlDB, "control-db", defaultControlDBPath, "control database (kill switches)")
 	f.StringVar(&o.fakeScript, "fake-script", "", "fake model script (provider fake only)")
 	f.StringVar(&o.modelName, "model-name", "", "overrides model.name from the agent file")
+	addWorkspaceFlags(cmd, &o)
 	return cmd
 }
 

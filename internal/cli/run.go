@@ -54,8 +54,7 @@ func newRunCmd() *cobra.Command {
 	f.StringVar(&o.runID, "run-id", "", "run id (default: generated)")
 	f.StringVar(&o.modelName, "model-name", "", "overrides model.name from the agent file")
 	f.StringVar(&o.agentDir, "agent-dir", "", "for NAME@N or NAME@ENV: directory that tool commands, hooks and sandbox.workspace are resolved against (default: the directory the version was registered from)")
-	f.StringVar(&o.workspaceOut, "workspace-out", "", "where to copy the sandbox workspace after the run (default .adlc/workspaces/<run-id>)")
-	f.BoolVar(&o.keepSandbox, "keep-sandbox", false, "do not destroy the sandbox container after the run")
+	addWorkspaceFlags(cmd, &o)
 	_ = cmd.MarkFlagRequired("task")
 	return cmd
 }
@@ -148,4 +147,13 @@ func runAgentWith(ctx context.Context, o runOptions, stdout io.Writer, openSandb
 		return nil
 	}
 	return &exitError{code: 2}
+}
+
+// addWorkspaceFlags registers --workspace-out and --keep-sandbox, which
+// decide what happens to the sandbox when the run ends (`run`, `approve`,
+// `resume`).
+func addWorkspaceFlags(cmd *cobra.Command, o *runOptions) {
+	f := cmd.Flags()
+	f.StringVar(&o.workspaceOut, "workspace-out", "", "where to copy the sandbox workspace after the run (default .adlc/workspaces/<run-id>)")
+	f.BoolVar(&o.keepSandbox, "keep-sandbox", false, "do not destroy the sandbox container after the run")
 }
