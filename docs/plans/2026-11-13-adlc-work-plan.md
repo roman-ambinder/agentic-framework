@@ -164,7 +164,7 @@ Set the numeric thresholds after E.4, once the suite's difficulty is known.
 | 2026-11-13 | Pull one real adapter (0.5b) into M0; start the eval track alongside M0 | Adopted in this plan |
 | 2026-11-13 | Move to Go 1.26 before further M0 work (task 0.0) | Every Anthropic Go SDK v2 release needs Go ≥ 1.25; latest OpenAI Go SDK v3 needs Go 1.26 |
 | 2026-11-13 | Split large tasks (0.5, 0.7, 0.9, 0.11, 1.4, 1.6) and write an implementation brief per task (`docs/impl/`) | So less capable models can implement tasks without making design decisions |
-| 2026-11-14 | Gate G0 | Passed on `claude-sonnet-5-5` (`scripts/gate-g0.sh`): stop completed, steps 2, tool calls 1 (`fs__read_file`, allowed by rule `reads`), tokens in 6 out 76, cache read 676, cache write 761, cost $0.002743; the answer quotes `hello, world`. Live tests: adapter tests passed; `TestLiveCacheReadsAcrossSteps` found an adapter bug (no `input_schema` sent for a tool without properties, API 400), fixed; rerun completed and step 2 read all 10851 cached tokens. Proceed |
+| 2026-11-14 | Gate G0 | Passed with the Anthropic adapter (`scripts/gate-g0.sh`; model from `ADLC_ANTHROPIC_MODEL`, not recorded here): stop completed, steps 2, tool calls 1 (`fs__read_file`, allowed by rule `reads`), tokens in 6 out 76, cache read 676, cache write 761, cost $0.002743; the answer quotes `hello, world`. Live tests: adapter tests passed; `TestLiveCacheReadsAcrossSteps` found an adapter bug (no `input_schema` sent for a tool without properties, API 400), fixed; rerun completed and step 2 read all 10851 cached tokens. Proceed |
 
 ## 9. Risks
 
