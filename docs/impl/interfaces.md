@@ -904,6 +904,22 @@ var (
 const ProcessesNotSupported = "process checkpoints are not supported yet"
 ```
 
+Image resolution (task I.2): a backend that can tell which image a sandbox
+runs also implements `ImageResolver`.
+
+```go
+type ImageResolver interface {
+	// ImageID returns "sha256:<hex>", the image sandbox h was created from.
+	ImageID(ctx context.Context, h Handle) (string, error)
+}
+func ShortImageID(id string) string // "sha256:" + first 12 hex; other strings unchanged
+```
+
+`docker.Backend` uses `ContainerInspect(h).Image` (the image the container
+really uses, even if the tag moved). An unknown container gives `ErrNotFound`.
+`sandboxtest.Pausable` returns `"sha256:fake-" + spec.Image`; its field
+`ImageIDErr` forces a failure.
+
 Test double: `sandboxtest.Pausable` (in memory; also has `Live`,
 `FindByRunID`, `Close`).
 

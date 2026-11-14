@@ -126,3 +126,40 @@ func TestPausableFindByRunID(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPausableImageID(t *testing.T) {
+	ctx := context.Background()
+	forced := errors.New("boom")
+	tests := []struct {
+		name    string
+		destroy bool
+		forceE  error
+		want    string
+		wantErr error
+	}{
+		{"live handle", false, nil, "sha256:fake-img:1", nil},
+		{"destroyed handle", true, nil, "", sandbox.ErrNotFound},
+		{"forced error", false, forced, "", forced},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Pausable{ImageIDErr: tt.forceE}
+			h, err := p.Create(ctx, newSpec())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.destroy {
+				if err := p.Destroy(ctx, h); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := p.ImageID(ctx, h)
+			if !errors.Is(err, tt.wantErr) || (tt.wantErr == nil && err != nil) {
+				t.Fatalf("err = %v, want %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("ImageID = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
