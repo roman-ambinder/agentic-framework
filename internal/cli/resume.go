@@ -197,6 +197,12 @@ func attachSandbox(ctx context.Context, a *agentconfig.Agent, runID string, src 
 	}
 	b, err := src.open(ctx)
 	if err != nil {
+		if !pending && !usesSandbox(a) {
+			// Only a kept container could be attached, and no tool needs it:
+			// without a backend, continue without a sandbox, as before.
+			fmt.Fprintf(stdout, "sandbox: could not look for a kept container: %v\n", err)
+			return nil, nil
+		}
 		return nil, err
 	}
 	var h sandbox.Handle

@@ -335,3 +335,26 @@ func TestAttachSandboxSpecWithoutPlaceholderNoContainer(t *testing.T) {
 		t.Error("backend not closed")
 	}
 }
+
+func TestAttachSandboxSpecWithoutPlaceholderBackendUnavailable(t *testing.T) {
+	a := sandboxAgent(t, strings.Replace(sandboxAgentYAML, "{{sandbox_id}}", "fixed", 1))
+	src := emptySource(t, nil)
+	src.open = func(context.Context) (sandboxLookup, error) { return nil, errors.New("docker unavailable") }
+	var out strings.Builder
+	sb, err := attachSandbox(context.Background(), a, "r1", src, &out)
+	if err != nil || sb != nil {
+		t.Fatalf("sb = %v, err = %v; want nil, nil (no Docker: continue without a sandbox, as before)", sb, err)
+	}
+	if !strings.Contains(out.String(), "sandbox: could not look for a kept container: docker unavailable") {
+		t.Errorf("stdout = %q", out.String())
+	}
+}
+
+func TestAttachSandboxPlaceholderBackendUnavailableFails(t *testing.T) {
+	a := sandboxAgent(t, sandboxAgentYAML)
+	src := emptySource(t, nil)
+	src.open = func(context.Context) (sandboxLookup, error) { return nil, errors.New("docker unavailable") }
+	if _, err := attachSandbox(context.Background(), a, "r1", src, io.Discard); err == nil {
+		t.Fatal("want an error: the tools need the sandbox")
+	}
+}
