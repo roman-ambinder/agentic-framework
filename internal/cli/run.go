@@ -122,7 +122,7 @@ func runAgentWith(ctx context.Context, o runOptions, stdout io.Writer, openSandb
 		return &exitError{code: 1, err: err}
 	}
 	defer closeKS()
-	sb, err := startRunSandbox(ctx, a, runID, openSandbox)
+	sb, err := startRunSandbox(ctx, a, runID, openSandbox, stdout)
 	if err != nil {
 		return &exitError{code: 1, err: err}
 	}
@@ -133,6 +133,7 @@ func runAgentWith(ctx context.Context, o runOptions, stdout io.Writer, openSandb
 		return &exitError{code: 1, err: err}
 	}
 	defer func() { _ = cleanup() }()
+	cfg.SandboxImage = sb.imageOrNil()
 	deps.KillSwitch = ks
 	state, err := harness.Run(ctx, cfg, deps)
 	if err != nil {
