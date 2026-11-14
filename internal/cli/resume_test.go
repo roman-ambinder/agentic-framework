@@ -312,15 +312,26 @@ func TestAttachSandbox(t *testing.T) {
 	}
 }
 
-func TestAttachSandboxSkippedWithoutPlaceholder(t *testing.T) {
+func TestAttachSandboxSpecWithoutPlaceholderFindsContainer(t *testing.T) {
 	a := sandboxAgent(t, strings.Replace(sandboxAgentYAML, "{{sandbox_id}}", "fixed", 1))
-	src := emptySource(t, nil)
-	src.open = func(context.Context) (sandboxLookup, error) {
-		t.Fatal("the sandbox backend must not be opened")
-		return nil, nil
-	}
-	_, err := attachSandbox(context.Background(), a, "r1", src, io.Discard)
+	fake := &fakeSandboxes{found: []sandbox.Handle{{ID: "abc123"}}}
+	sb, err := attachSandbox(context.Background(), a, "r1", emptySource(t, fake), io.Discard)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if sb == nil || sb.handle.ID != "abc123" {
+		t.Fatalf("sb = %+v, want the kept container attached so finish can copy it out", sb)
+	}
+}
+
+func TestAttachSandboxSpecWithoutPlaceholderNoContainer(t *testing.T) {
+	a := sandboxAgent(t, strings.Replace(sandboxAgentYAML, "{{sandbox_id}}", "fixed", 1))
+	fake := &fakeSandboxes{}
+	sb, err := attachSandbox(context.Background(), a, "r1", emptySource(t, fake), io.Discard)
+	if err != nil || sb != nil {
+		t.Fatalf("sb = %v, err = %v; want nil, nil (resume without a sandbox, as before)", sb, err)
+	}
+	if !fake.closed {
+		t.Error("backend not closed")
 	}
 }
