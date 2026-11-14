@@ -342,6 +342,16 @@ type Log interface {
 func (s *Store) Runs(ctx context.Context) ([]string, error)
 ```
 
+Task P.1 adds the event kinds `sandbox_suspended` (`SandboxSuspended`) and
+`sandbox_restored` (`SandboxRestored`). `Fold` accepts them while a run is
+paused or running and they never change `Status` or any other `RunState` field
+except `LastSeq` (a new field would change every digest; their time and cost
+are not counted, so the human wait does not use the wall-clock budget). A
+paused run still rejects every kind except `approval_resolved` and these two;
+a finished run rejects both. An older adlc binary cannot fold a run paused by
+a newer one (its paused-state check rejects sandbox events before unknown-kind
+handling).
+
 ## §4 Policy — `internal/policy`
 
 ```go
@@ -778,6 +788,8 @@ Task 1.6.1 adds the optional `context:` section (`max_input_tokens`,
 `keep_recent_steps`, both >= 0) and `(*Agent).ContextBudget() contextmgr.Budget`,
 which the CLI wiring assigns to `harness.Config.Context`.
 
+Task P.5a adds `sandbox.pause` (`auto` default, `files`, `keep`; constants `PauseAuto`, `PauseFiles`, `PauseKeep`) and `(*Sandbox).Suspends() bool` (true unless `keep`).
+
 Task Q.4 adds the optional `planning:` section (enabled, prompt, max_tokens 0..1000000); harnessConfig maps it to harness.Config.Plan.
 
 Task C.2 adds `policy.include` (policy files, `PolicyFile{include, rules}`, paths relative to the naming file, no
@@ -867,6 +879,32 @@ not an error (the error return means "could not run at all").
 Defaults (task 1.4.2): no network unless `Network`; user 65532:65532; all
 capabilities dropped; 512 processes; `HOME=/tmp` unless set; the workspace
 is copied in, never bind-mounted.
+
+Suspend and restore (task P.2): a backend that can save `/workspace` to a
+file and free the container also implements `Suspender` (files only; no
+process checkpoints yet).
+
+```go
+type Suspender interface {
+	Suspend(ctx context.Context, h Handle, tarPath string) (Snapshot, error)
+	Restore(ctx context.Context, spec Spec, snap Snapshot) (Handle, error)
+}
+type Snapshot struct {
+	TarPath          string // absolute path of the /workspace archive
+	SHA256           string // "sha256:<hex>" of the file at TarPath
+	Bytes            int64
+	ImageID          string // image ID the container ran
+	ProcessesSkipped string // why processes were not kept
+}
+var (
+	ErrSnapshotChanged = errors.New("sandbox: snapshot file changed")
+	ErrImageGone       = errors.New("sandbox: snapshot image is gone")
+)
+const ProcessesNotSupported = "process checkpoints are not supported yet"
+```
+
+Test double: `sandboxtest.Pausable` (in memory; also has `Live`,
+`FindByRunID`, `Close`).
 
 Test double: `internal/sandbox/sandboxtest.Host` (`NewHost(dir)`) runs
 commands on the host in a temp copy — no isolation, tests only.
@@ -1093,6 +1131,28 @@ func (s *Store) Promote(ctx context.Context, name string, version int, env Env,
 
 var ErrInvalidRef, ErrInvalidAgent, ErrVersionNotFound, ErrNotPromoted, ErrReportMismatch, ErrPromotionRefused error
 ```
+
+### CLI (`internal/cli`) — P.5b
+
+- `runBackend` and `sandboxLookup` embed `sandbox.Suspender`; `sandboxLookup`
+  is `runBackend` plus `Exec`.
+- `snapshot.go`: `snapshotPath(dbPath, runID, seq)` →
+  `<dir of db>/snapshots/<run_id>/<seq>.tar`; `pendingSnapshot(ctx, store,
+  runID, dbDir)` scans the log (no `RunState` field, see design §5.3) and
+  returns the latest unrestored snapshot with an absolute `TarPath`;
+  `appendSuspended` (stores `SnapshotRef` relative to `dbDir`) and
+  `appendRestored` (`Processes: false`, `FallbackCause` =
+  `ProcessesSkipped`).
+- `(*runSandbox).finish(ctx, o, store, state, stdout)`: a run awaiting
+  approval is suspended (`sandbox: paused (files only: <reason>)`) unless
+  `pause: keep`; a failed `Suspend` keeps the container and appends nothing.
+- `attachSandbox(ctx, a, runID, sandboxSource{open, store, dbDir}, stdout)
+  (*runSandbox, error)` restores a pending snapshot
+  (`sandbox: restored <short id> (files only: /workspace kept; running
+  processes and files outside /workspace were not kept)`) or does the live lookup as before;
+  `adlc approve` and `adlc resume` call `finish` on the state they get back,
+  and after a failed `Approve`/`Resume` pause the sandbox again if the run is
+  still paused.
 
 ### Evals (`internal/evals`)
 

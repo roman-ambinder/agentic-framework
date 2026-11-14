@@ -425,3 +425,28 @@ func TestApproveWallClockExcludesPause(t *testing.T) {
 	r := e.approve(t, yes("a-w1"), textTurn("done"))
 	wantStop(t, r.state, adlcv1.StopReason_STOP_REASON_COMPLETED, "")
 }
+
+// The CLI records sandbox_restored at approve time, before Approve reads the
+// log; the human wait before it must not count against the wall clock.
+func TestApproveWallClockIgnoresSandboxEvents(t *testing.T) {
+	clock := &stepClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	cfg := baseConfig()
+	cfg.Budget = &adlcv1.Budget{MaxWallClock: durationpb.New(60 * time.Second)}
+	store := clockedLog(t, clock)
+	e := pausedRun(t, cfg, nil, nil, store, clock.Now, toolTurn(writeCall("w1")))
+	ctx := context.Background()
+	susp, err := store.Append(ctx, &adlcv1.Event{RunId: cfg.RunID, Payload: &adlcv1.Event_SandboxSuspended{
+		SandboxSuspended: &adlcv1.SandboxSuspended{SnapshotRef: "s.tar"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.t = clock.t.Add(time.Hour)
+	if _, err := store.Append(ctx, &adlcv1.Event{RunId: cfg.RunID, Payload: &adlcv1.Event_SandboxRestored{
+		SandboxRestored: &adlcv1.SandboxRestored{SuspendedSeq: susp.GetSeq(), SandboxId: "s2"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	r := e.approve(t, yes("a-w1"), textTurn("done"))
+	wantStop(t, r.state, adlcv1.StopReason_STOP_REASON_COMPLETED, "")
+}

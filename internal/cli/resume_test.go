@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	"github.com/roman-ambinder/agentic-framework/internal/eventlog"
 	"github.com/roman-ambinder/agentic-framework/internal/harness"
 	"github.com/roman-ambinder/agentic-framework/internal/sandbox"
+	"github.com/roman-ambinder/agentic-framework/internal/sandbox/sandboxtest"
 )
 
 // stopAfterLog stops writing after n events, so the log ends where a crash
@@ -202,8 +205,10 @@ func TestResumeCommandMissingLog(t *testing.T) {
 	}
 }
 
-// fakeSandboxes answers FindByRunID and Exec from fields.
+// fakeSandboxes answers FindByRunID and Exec from fields; the other
+// backend methods come from the embedded Pausable.
 type fakeSandboxes struct {
+	sandboxtest.Pausable
 	found    []sandbox.Handle
 	probeErr error
 	probed   []string
@@ -244,6 +249,18 @@ func sandboxAgent(t *testing.T, yaml string) *agentconfig.Agent {
 	return a
 }
 
+// emptySource is a sandboxSource over b and an empty event log.
+func emptySource(t *testing.T, b sandboxLookup) sandboxSource {
+	t.Helper()
+	dir := t.TempDir()
+	store, err := eventlog.Open(context.Background(), filepath.Join(dir, "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return sandboxSource{open: func(context.Context) (sandboxLookup, error) { return b, nil }, store: store, dbDir: dir}
+}
+
 func TestAttachSandbox(t *testing.T) {
 	h := sandbox.Handle{ID: "abc123"}
 	tests := []struct {
@@ -265,10 +282,10 @@ func TestAttachSandbox(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			a := sandboxAgent(t, sandboxAgentYAML)
-			err := attachSandbox(context.Background(), a, "r1", func(context.Context) (sandboxLookup, error) { return tt.fake, nil })
+			sb, err := attachSandbox(context.Background(), a, "r1", emptySource(t, tt.fake), io.Discard)
 			if tt.wantErr != "" {
-				if err == nil || err.Error() != tt.wantErr {
-					t.Fatalf("err = %v, want %q", err, tt.wantErr)
+				if err == nil || err.Error() != tt.wantErr || sb != nil || !tt.fake.closed {
+					t.Fatalf("err = %v, want %q; sb %v, closed %v", err, tt.wantErr, sb, tt.fake.closed)
 				}
 				if strings.Contains(strings.Join(a.Tools[0].Command, " "), "abc123") {
 					t.Fatal("commands were expanded despite the error")
@@ -281,8 +298,15 @@ func TestAttachSandbox(t *testing.T) {
 			if got := strings.Join(a.Tools[0].Command, " "); got != "adlc tool shell --sandbox abc123" {
 				t.Fatalf("command = %q", got)
 			}
-			if len(tt.fake.probed) != 1 || tt.fake.probed[0] != "abc123 true" || !tt.fake.closed {
-				t.Fatalf("probed %v, closed %v", tt.fake.probed, tt.fake.closed)
+			if len(tt.fake.probed) != 1 || tt.fake.probed[0] != "abc123 true" || tt.fake.closed {
+				t.Fatalf("probed %v, closed %v (the caller closes)", tt.fake.probed, tt.fake.closed)
+			}
+			if sb == nil || sb.handle.ID != "abc123" {
+				t.Fatalf("sb = %+v", sb)
+			}
+			sb.close()
+			if !tt.fake.closed {
+				t.Fatal("close did not close the backend")
 			}
 		})
 	}
@@ -290,10 +314,12 @@ func TestAttachSandbox(t *testing.T) {
 
 func TestAttachSandboxSkippedWithoutPlaceholder(t *testing.T) {
 	a := sandboxAgent(t, strings.Replace(sandboxAgentYAML, "{{sandbox_id}}", "fixed", 1))
-	err := attachSandbox(context.Background(), a, "r1", func(context.Context) (sandboxLookup, error) {
+	src := emptySource(t, nil)
+	src.open = func(context.Context) (sandboxLookup, error) {
 		t.Fatal("the sandbox backend must not be opened")
 		return nil, nil
-	})
+	}
+	_, err := attachSandbox(context.Background(), a, "r1", src, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}

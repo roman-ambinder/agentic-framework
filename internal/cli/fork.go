@@ -111,7 +111,7 @@ func forkAgentWith(ctx context.Context, o forkOptions, originID string, stdout i
 	}
 	fmt.Fprintf(stdout, "%-9s%s at step %d (%d events copied)\n", "forked:", originID, o.atStep, copied)
 	printSummary(stdout, state)
-	if err := sb.finish(ctx, o.runOptions, state, stdout); err != nil {
+	if err := sb.finish(ctx, o.runOptions, store, state, stdout); err != nil {
 		return &exitError{code: 1, err: err}
 	}
 	if state.StopReason == adlcv1.StopReason_STOP_REASON_COMPLETED {

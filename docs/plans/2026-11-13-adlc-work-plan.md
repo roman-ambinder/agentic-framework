@@ -51,6 +51,7 @@ results, written down in §8 before work moves on.
 | Q.1, Q.2 | M2-Q: pass@k and `adlc eval-compare`, failure analysis | ✅ merged (PR #11) |
 | Q.3–Q.5 | M2-Q: fork a run, plan step, model per step role | ✅ on `integration` |
 | W.1–W.6 | M3: workflow file, events, engine, review loop, gates and CLI, SDLC pipeline (`docs/impl/m3.md`) | 📝 briefed; build after G1 |
+| P.1–P.3, P.5a–P.5b | Sandbox pause, files path: a run parked for approval frees its container and restores `/workspace` on approve | ✅ done (P.4, process checkpoints, open) |
 | E.4 | Manual baseline (a person runs it; sets gate G1's numbers) | ⏳ open |
 | 1.10 | Coder agent iteration (needs model API keys and a Docker host) | ⏳ open |
 

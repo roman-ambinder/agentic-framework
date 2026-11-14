@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -175,11 +176,10 @@ func approveRun(ctx context.Context, o approveOptions, approvalID, runID string,
 	if o.agentPath == "" {
 		return &exitError{code: 1, err: fmt.Errorf("approve: AGENT_YAML is required to continue run %q", runID)}
 	}
-	state, err := continueRun(ctx, o, store, runID, res, openSandbox)
+	state, err := continueRun(ctx, o, store, runID, res, openSandbox, stdout)
 	if err != nil {
 		return &exitError{code: 1, err: err}
 	}
-	printSummary(stdout, state)
 	if state.StopReason == adlcv1.StopReason_STOP_REASON_COMPLETED {
 		return nil
 	}
@@ -199,9 +199,12 @@ func resolveOnly(ctx context.Context, store *eventlog.Store, runID string, res h
 	return nil
 }
 
-// continueRun builds the run as `adlc resume` does and calls harness.Approve.
+// continueRun builds the run as `adlc resume` does, calls harness.Approve,
+// prints the summary and finishes the sandbox like `adlc run`: a run that
+// parks again is paused again. If Approve fails while the run is still
+// paused, the sandbox is paused again too (design §5.4).
 func continueRun(ctx context.Context, o approveOptions, store *eventlog.Store, runID string, res harness.Resolution,
-	openSandbox func(context.Context) (sandboxLookup, error),
+	openSandbox func(context.Context) (sandboxLookup, error), stdout io.Writer,
 ) (*eventlog.RunState, error) {
 	ro, cleanupRef, err := resolveAgentRef(ctx, o.runOptions)
 	if err != nil {
@@ -218,14 +221,26 @@ func continueRun(ctx context.Context, o approveOptions, store *eventlog.Store, r
 		return nil, err
 	}
 	defer closeKS()
-	if err := attachSandbox(ctx, a, runID, openSandbox); err != nil {
+	sb, err := attachSandbox(ctx, a, runID, sandboxSource{open: openSandbox, store: store, dbDir: filepath.Dir(o.db)}, stdout)
+	if err != nil {
 		return nil, err
 	}
+	defer sb.close()
 	cfg, deps, cleanup, err := buildRun(ctx, a, o.runOptions, runID, store)
 	if err != nil {
+		sb.finishAfterError(ctx, o.runOptions, store, stdout)
 		return nil, err
 	}
 	defer func() { _ = cleanup() }()
 	deps.KillSwitch = ks
-	return harness.Approve(ctx, cfg, deps, res)
+	state, err := harness.Approve(ctx, cfg, deps, res)
+	if err != nil {
+		sb.finishAfterError(ctx, o.runOptions, store, stdout)
+		return nil, err
+	}
+	printSummary(stdout, state)
+	if err := sb.finish(ctx, o.runOptions, store, state, stdout); err != nil {
+		return nil, err
+	}
+	return state, nil
 }
