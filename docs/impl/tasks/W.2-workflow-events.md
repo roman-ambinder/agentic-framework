@@ -4,7 +4,8 @@ Size: M · Depends on: — · Branch: `task/W.2-workflow-events` · PR title: `W
 
 ## Goal
 
-After this task the event schema has six workflow payloads (numbers 23–28)
+After this task the event schema has six workflow payloads (numbers 25–30; 23 and 24 are `sandbox_suspended` and
+`sandbox_restored`, task P.1)
 and three enums, exactly as in m3.md "Events"; an `eventlog.Store` opened
 with `eventlog.WithFirstKind("workflow_started")` holds workflow logs (m3.md
 decision 2: `.adlc/workflows.db`, one log per workflow, `run_id` = workflow
@@ -19,10 +20,11 @@ other's code.
 - `AGENTS.md` (rules 4–5); `docs/impl/m3.md` (decisions 2, 3, 5, 8, 9, 10, 12, 14; "Events"; "Sequencing rules the fold enforces"; "Fold")
 - `docs/impl/interfaces.md` §3, §10, §12 (created by W.1)
 - `contracts/proto/adlc/v1/events.proto`; `buf.yaml`, `buf.gen.yaml`; `Makefile` targets `proto`, `proto-lint`, `proto-check`, `proto-breaking`
-- `contracts/contracts_test.go` (`samplePayloads`, `TestEveryPayloadKindCovered`)
+- `contracts/contracts_test.go` (`samplePayloads` with P.1's `sandbox_suspended`/`sandbox_restored` entries, `TestEveryPayloadKindCovered`)
 - `internal/eventlog/store.go` (`Open`, `Option`, `Append`'s first-event check, `Kind`)
 - `internal/eventlog/store_test.go` (`openStore`, `started`, `mustAppend`, `TestAppendRejects`)
-- `internal/eventlog/fold.go` and `fold_test.go`: copy the style of `apply` (seq, first event, run id,
+- `internal/eventlog/fold.go` and `fold_test.go` (including P.1's `isSandboxEvent` handling and the
+  `sandboxSuspended`/`sandboxRestored` samples, which stay as they are): copy the style of `apply` (seq, first event, run id,
   "nothing after finish", one `case` per payload, short error texts wrapped once in `ErrInvalidLog`)
   and of `logOf`, `TestFoldInvalidLogs`, `TestEveryKindIsHandled`
 
@@ -60,15 +62,15 @@ only `doc.go`, `state.go`, `fold.go` and `fold_test.go`. `go.mod` and
 
 ### `events.proto` (additive only)
 
-In `Event.payload`, after `RunResumed run_resumed = 22;`:
+In `Event.payload`, after `SandboxRestored sandbox_restored = 24;` (task P.1):
 
 ```proto
-    WorkflowStarted workflow_started = 23;
-    TaskStarted task_started = 24;
-    TaskFinished task_finished = 25;
-    GateRequested gate_requested = 26;
-    GateResolved gate_resolved = 27;
-    WorkflowCompleted workflow_completed = 28;
+    WorkflowStarted workflow_started = 25;
+    TaskStarted task_started = 26;
+    TaskFinished task_finished = 27;
+    GateRequested gate_requested = 28;
+    GateResolved gate_resolved = 29;
+    WorkflowCompleted workflow_completed = 30;
 ```
 
 At the end of the file, a new section with the messages and enums of m3.md
@@ -137,7 +139,8 @@ anything that exists. Run `make proto` (never edit `gen/`), then
 ### `contracts/contracts_test.go`
 
 Add six entries to `samplePayloads` (`TestEveryPayloadKindCovered` fails
-without them):
+without them), after the `"sandbox_restored"` entry that task P.1 added, in the
+same style (one composite literal per kind):
 
 ```go
 "workflow_started": {Payload: &adlcv1.Event_WorkflowStarted{WorkflowStarted: &adlcv1.WorkflowStarted{
@@ -191,8 +194,11 @@ the engine uses `Read` and `workflow.Fold`. `Store.Runs` lists workflow ids.
 
 ### `internal/eventlog/fold_test.go`
 
-`TestEveryKindIsHandled` iterates every payload kind of the schema; workflow
-kinds never reach `eventlog.Fold`, so it must skip them:
+`TestEveryKindIsHandled` (as it is now, with P.1's `sandbox_suspended` and
+`sandbox_restored` samples in both `samples` and `order`) folds one sample of
+every kind and then requires every oneof field of the schema to have been
+seen. Workflow kinds never reach `eventlog.Fold`, so it must skip them; do not
+add them to `samples` or `order`. Add above the test:
 
 ```go
 // workflowKinds are payloads of workflow logs (task W.2). eventlog.Fold never
@@ -203,10 +209,14 @@ var workflowKinds = map[string]bool{
 }
 ```
 
-In the loop over `fields`: `if workflowKinds[name] { continue }` before the
-"no sample" check. Add `TestFoldCountsWorkflowEventsAsUnknown`: `logOf(<a
-task_started event>)` folds without error and `UnknownEvents == 1` (this
-records today's behaviour; `fold.go` is unchanged).
+In the final loop over `fields`, change the body to
+`name := string(fields.Get(i).Name()); if workflowKinds[name] { continue }; if !seen[name] { t.Errorf(...) }`
+(same message as now). Add `TestFoldCountsWorkflowEventsAsUnknown`, next to
+`TestFoldSkipsUnknownKinds`: `logOf(<a task_started event>, failure())` folds
+without error, `UnknownEvents == 1`, `LastSeq == 3` (this records today's
+behaviour: a workflow kind in a running run log falls into the `default:`
+branch of `apply`; `fold.go`, including P.1's sandbox handling, is unchanged).
+Add the `task_started` event inline in the test; do not add a helper.
 
 ### `doc.go` (shared with W.1)
 
@@ -451,25 +461,25 @@ starts again with a new run id.
 
 ### `interfaces.md` text
 
-§3, after the `Runs` block:
+§3, at the end of the section (after the task P.1 paragraph on `sandbox_suspended`/`sandbox_restored`):
 
 ```markdown
 Task W.2 adds `func WithFirstKind(kind string) Option`: the payload kind the
 first event of every log must have (default `"run_started"`); the workflow
 log (`.adlc/workflows.db`) is opened with `WithFirstKind("workflow_started")`.
-`Kind` returns the six workflow kinds for payloads 23–28. `eventlog.Fold` is
+`Kind` returns the six workflow kinds for payloads 25–30. `eventlog.Fold` is
 unchanged; workflow logs are folded by `workflow.Fold`.
 ```
 
-§10, add rows (after the Q.3 rows):
+§10, add rows at the end of the table (after the Q.3 rows; check the table and `events.proto` first: P.1's payloads 23 and 24 are in the `.proto` but not in this table — if a P.1 row has been added since, put yours after it):
 
 ```markdown
-| W.2 | `Event` payload oneof | `WorkflowStarted workflow_started` | 23 |
-| W.2 | `Event` payload oneof | `TaskStarted task_started` | 24 |
-| W.2 | `Event` payload oneof | `TaskFinished task_finished` | 25 |
-| W.2 | `Event` payload oneof | `GateRequested gate_requested` | 26 |
-| W.2 | `Event` payload oneof | `GateResolved gate_resolved` | 27 |
-| W.2 | `Event` payload oneof | `WorkflowCompleted workflow_completed` | 28 |
+| W.2 | `Event` payload oneof | `WorkflowStarted workflow_started` | 25 |
+| W.2 | `Event` payload oneof | `TaskStarted task_started` | 26 |
+| W.2 | `Event` payload oneof | `TaskFinished task_finished` | 27 |
+| W.2 | `Event` payload oneof | `GateRequested gate_requested` | 28 |
+| W.2 | `Event` payload oneof | `GateResolved gate_resolved` | 29 |
+| W.2 | `Event` payload oneof | `WorkflowCompleted workflow_completed` | 30 |
 | W.2 | new messages and enums | `WorkflowStarted` (1–7), `TaskStarted` (1–7), `TaskFinished` (1–9), `GateRequested`, `GateResolved`, `WorkflowCompleted`; `TaskRole`, `TaskOutcome`, `WorkflowOutcome` (docs/impl/m3.md) | — |
 ```
 
@@ -488,7 +498,7 @@ creates this section; W.2–W.6 each append their own subsection below.
 ```markdown
 ### Workflow events and fold (W.2)
 
-Payloads 23–28 (§10); `eventlog.WithFirstKind` (§3); `Status`
+Payloads 25–30 (§10); `eventlog.WithFirstKind` (§3); `Status`
 (`StatusRunning`, `StatusAwaitingApproval`, `StatusCompleted`), `TaskState`,
 `State`, `Fold`, `ErrInvalidLog`. The fold enforces m3.md's sequencing rules:
 one run open at a time; a continuation (same run id) after
@@ -526,7 +536,7 @@ attempt = the producer attempt it reviews; gates before a task's first start.
 | Test | Asserts |
 |------|---------|
 | `TestEveryKindIsHandled` (changed) | as before for every kind except the six in `workflowKinds` |
-| `TestFoldCountsWorkflowEventsAsUnknown` | `logOf(task_started event)` → no error, `UnknownEvents == 1` |
+| `TestFoldCountsWorkflowEventsAsUnknown` | `logOf(task_started event, failure())` → no error, `UnknownEvents == 1`, `LastSeq == 3` |
 
 ### `contracts/contracts_test.go`
 
@@ -566,7 +576,7 @@ Below, `P(a,r,run)` = `evProd("t", a, r, run)`, `C(...)` = `evCritic("t", ...)`,
 | `TestFoldParkedTwice` | start, park, continuation, park, continuation, PASSED, all with key `P(1,0,r1)` → valid, Passed |
 | `TestFoldCompletedOutcomes` | table: FAILED after a CHECKS_FAILED task; BUDGET_EXHAUSTED with no task; CANCELLED while a gate is pending (GatePending stays true); CANCELLED while a run is parked (SandboxID stays) → each: Status completed, Outcome and Detail as given |
 | `TestFoldSkipsUnknownKinds` | `evLog(&adlcv1.Event{}, S(P(1,0,r1)))` → valid, `LastSeq 3`, task running |
-| `TestFoldRejectsRunEvents` | for every payload kind of the schema except the six workflow kinds, built with protoreflect (`m.Set(fd, m.NewField(fd))`): `evLog(that event)` → `foldBad(…, "is not a workflow event")` |
+| `TestFoldRejectsRunEvents` | for every payload kind of the schema except the six workflow kinds (so also P.1's `sandbox_suspended` and `sandbox_restored`), built with protoreflect (`m.Set(fd, m.NewField(fd))`): `evLog(that event)` → `foldBad(…, "is not a workflow event")` |
 | `TestFoldErrorNamesWorkflowAndSeq` | `evLog(F(P(1,0,r1), PASSED, ""))` → text starts with `workflow: invalid log: workflow "w1" seq 2: ` |
 | `TestFoldInvalidLogs` | table below; each row `foldBad(t, events, sub)` |
 
@@ -644,7 +654,8 @@ make ci                                      # passes
 
 ## Pitfalls
 
-- Never edit `gen/`; run `make proto`. Never renumber or reorder existing fields or payloads.
+- Never edit `gen/`; run `make proto`. Never renumber or reorder existing fields or payloads. 23 and 24 are taken by P.1; the workflow payloads are 25–30 (m3.md decision 12).
+- `eventlog.Fold` already handles `sandbox_suspended`/`sandbox_restored` (P.1); leave `fold.go` untouched. For `workflow.Fold` they are run events and are rejected like any other.
 - The new payload names in the oneof must be exactly `workflow_started`, …, `workflow_completed`: `eventlog.Kind` and the store's `kind` column use them.
 - `WithFirstKind` must keep every message of the default store identical, or existing tests and users break.
 - `TestEveryKindIsHandled` in `internal/eventlog` and `TestEveryPayloadKindCovered` in `contracts` both fail as soon as the proto changes; that is expected, fix them as described, do not delete them.
@@ -660,7 +671,7 @@ make ci                                      # passes
 
 ## Done checklist
 
-- [ ] Six payloads 23–28 (with `source_commit = 7`, `TaskStarted.sandbox_id = 7`, `TaskFinished.sandbox_id = 9`) and the three enums exactly as m3.md; `make proto`; `proto-lint` and `proto-breaking` pass
+- [ ] Six payloads 25–30 (with `source_commit = 7`, `TaskStarted.sandbox_id = 7`, `TaskFinished.sandbox_id = 9`) and the three enums exactly as m3.md; `make proto`; `proto-lint` and `proto-breaking` pass
 - [ ] `contracts_test.go` samples; `eventlog` `TestEveryKindIsHandled` skips workflow kinds
 - [ ] `eventlog.WithFirstKind`; default behaviour and messages unchanged; unknown kind refused by `Open`
 - [ ] `workflow.Fold`, `State` (with `SourceCommit`), `TaskState` (with `SandboxID`), `Status*` constants; m3.md's sequencing rules; every row of `TestFoldInvalidLogs`

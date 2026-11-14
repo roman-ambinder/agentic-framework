@@ -1015,6 +1015,8 @@ JSON report (with run ids), not as events.
 | 0.11.1 | new file `plugin.proto` | `HookService`, `ToolCallInfo`, `PreToolRequest/Response`, `PostToolRequest/Response` | — |
 | Q.3 | `RunStarted` | `string forked_from_run_id` | 7 |
 | Q.3 | `RunStarted` | `uint32 forked_at_step` | 8 |
+| P.1 | `Event` payload oneof | `SandboxSuspended sandbox_suspended` | 23 |
+| P.1 | `Event` payload oneof | `SandboxRestored sandbox_restored` | 24 |
 
 Every addition is additive; `make proto-breaking` must pass. Before taking a
 number, check this table and the `.proto` file; add your row here in the same PR.
