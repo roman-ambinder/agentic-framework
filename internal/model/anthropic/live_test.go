@@ -16,8 +16,8 @@ import (
 func liveAdapter(t *testing.T) (*Adapter, string) {
 	t.Helper()
 	modelID := os.Getenv("ADLC_ANTHROPIC_MODEL")
-	if os.Getenv("ANTHROPIC_API_KEY") == "" || modelID == "" {
-		t.Skip("set ANTHROPIC_API_KEY and ADLC_ANTHROPIC_MODEL")
+	if !HasCredentials() || modelID == "" {
+		t.Skip("set ADLC_ANTHROPIC_MODEL and ANTHROPIC_API_KEY (or sign in with `ant auth login`)")
 	}
 	return New(Options{}), modelID
 }

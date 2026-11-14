@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
 # Gate G0: run a real model through the agent loop once, and record the result.
-# Needs ANTHROPIC_API_KEY, ADLC_ANTHROPIC_MODEL and the four
-# ADLC_ANTHROPIC_PRICE_* variables (see docs/impl/gate-g0.md).
+# Needs ADLC_ANTHROPIC_MODEL, the four ADLC_ANTHROPIC_PRICE_* variables and a
+# credential: ANTHROPIC_API_KEY, or a sign-in from `ant auth login`
+# (see docs/impl/gate-g0.md).
 # Spends real money: a few small requests (the hello agent's budget is 0.10 USD).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 missing=0
-for v in ANTHROPIC_API_KEY ADLC_ANTHROPIC_MODEL ADLC_ANTHROPIC_PRICE_INPUT \
+for v in ADLC_ANTHROPIC_MODEL ADLC_ANTHROPIC_PRICE_INPUT \
 	ADLC_ANTHROPIC_PRICE_OUTPUT ADLC_ANTHROPIC_PRICE_CACHE_READ ADLC_ANTHROPIC_PRICE_CACHE_WRITE; do
 	if [ -z "${!v:-}" ]; then
 		echo "gate-g0: $v is not set" >&2
 		missing=1
 	fi
 done
+if ! go run ./scripts/gate-g0-creds; then
+	echo "gate-g0: no Anthropic credential: set ANTHROPIC_API_KEY or run 'ant auth login'" >&2
+	missing=1
+fi
 [ "$missing" -eq 0 ] || exit 1
 
 mkdir -p bin/gate-g0

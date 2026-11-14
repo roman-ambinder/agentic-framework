@@ -28,8 +28,8 @@ func liveSystemPrompt() string {
 // must be the same as the previous one (tools, system, earlier messages).
 func TestLiveCacheReadsAcrossSteps(t *testing.T) {
 	modelID := os.Getenv("ADLC_ANTHROPIC_MODEL")
-	if os.Getenv("ANTHROPIC_API_KEY") == "" || modelID == "" {
-		t.Skip("set ANTHROPIC_API_KEY and ADLC_ANTHROPIC_MODEL")
+	if !anthropic.HasCredentials() || modelID == "" {
+		t.Skip("set ADLC_ANTHROPIC_MODEL and ANTHROPIC_API_KEY (or sign in with `ant auth login`)")
 	}
 	system := liveSystemPrompt()
 	if len(system) < 20000 {

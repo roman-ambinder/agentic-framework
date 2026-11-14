@@ -21,7 +21,7 @@ const ProviderName = "anthropic"
 
 // Options configures New.
 type Options struct {
-	APIKey           string       // "" = the SDK reads ANTHROPIC_API_KEY from the environment
+	APIKey           string       // "" = the SDK's default chain: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, then a signed-in profile
 	BaseURL          string       // "" = SDK default; tests use an httptest URL
 	HTTPClient       *http.Client // nil = SDK default
 	MaxContextTokens int          // reported in Capabilities; 0 = unknown
