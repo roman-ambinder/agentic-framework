@@ -221,6 +221,9 @@ func continueRun(ctx context.Context, o approveOptions, store *eventlog.Store, r
 		return nil, err
 	}
 	defer closeKS()
+	if err := checkAgentVersion(ctx, store, runID, a); err != nil {
+		return nil, err
+	}
 	sb, err := attachSandbox(ctx, a, runID, sandboxSource{open: openSandbox, store: store, dbDir: filepath.Dir(o.db)}, stdout)
 	if err != nil {
 		return nil, err

@@ -104,6 +104,9 @@ func resumeAgent(ctx context.Context, o runOptions, runID string, stdout io.Writ
 	if err := checkResumable(ctx, store, runID); err != nil {
 		return &exitError{code: 1, err: err}
 	}
+	if err := checkAgentVersion(ctx, store, runID, a); err != nil {
+		return &exitError{code: 1, err: err}
+	}
 	ks, closeKS, err := openKillSwitch(ctx, o.controlDB)
 	if err != nil {
 		return &exitError{code: 1, err: err}
@@ -228,4 +231,17 @@ func findLiveSandbox(ctx context.Context, b sandboxLookup, runID string) (sandbo
 		return sandbox.Handle{}, gone
 	}
 	return found[0], nil
+}
+
+// checkAgentVersion refuses with harness.ErrAgentMismatch when the agent file
+// a is not the version that started runID, before any sandbox is restored.
+func checkAgentVersion(ctx context.Context, store *eventlog.Store, runID string, a *agentconfig.Agent) error {
+	st, err := store.State(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if st.AgentVersion != a.AgentID() {
+		return fmt.Errorf("%w: run has %s, agent file is %s", harness.ErrAgentMismatch, st.AgentVersion, a.AgentID())
+	}
+	return nil
 }
