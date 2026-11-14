@@ -546,6 +546,7 @@ type Config struct {
 	// MaxInputTokens 0 = derived from the adapter's MaxContextTokens.
 	Context contextmgr.Budget
 	Plan    PlanConfig // task Q.4: planning call before step 1; zero = off
+	SandboxImage *adlcv1.SandboxImage // task I.1: image of the run's sandbox, recorded in run_started; nil = none
 }
 
 // PlanCallID is the call id of the planning call; its step is 0 (task Q.4).
@@ -1015,6 +1016,8 @@ JSON report (with run ids), not as events.
 | 0.11.1 | new file `plugin.proto` | `HookService`, `ToolCallInfo`, `PreToolRequest/Response`, `PostToolRequest/Response` | — |
 | Q.3 | `RunStarted` | `string forked_from_run_id` | 7 |
 | Q.3 | `RunStarted` | `uint32 forked_at_step` | 8 |
+| I.1 | `RunStarted` | `SandboxImage sandbox_image` | 9 |
+| I.1 | new message | `SandboxImage { string ref = 1; string id = 2; }` | — |
 
 Every addition is additive; `make proto-breaking` must pass. Before taking a
 number, check this table and the `.proto` file; add your row here in the same PR.

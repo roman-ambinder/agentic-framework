@@ -22,7 +22,8 @@ func samplePayloads() map[string]*adlcv1.Event {
 	return map[string]*adlcv1.Event{
 		"run_started": {Payload: &adlcv1.Event_RunStarted{RunStarted: &adlcv1.RunStarted{
 			AgentVersion: "coder@1", Task: "fix bug",
-			Budget: &adlcv1.Budget{MaxSteps: 50, MaxWallClock: durationpb.New(10 * time.Minute)},
+			SandboxImage: &adlcv1.SandboxImage{Ref: "golang:1.26", Id: "sha256:abc"},
+			Budget:       &adlcv1.Budget{MaxSteps: 50, MaxWallClock: durationpb.New(10 * time.Minute)},
 		}}},
 		"run_resumed": {Payload: &adlcv1.Event_RunResumed{RunResumed: &adlcv1.RunResumed{
 			NextStep: 3, VerifiedCheckpointSeq: 9, AbandonedToolCalls: 1, Reason: "process stopped without run_completed",

@@ -82,6 +82,7 @@ func (l *loop) run() (*eventlog.RunState, error) {
 	defer cancel()
 	if _, err := l.add(&adlcv1.Event{Payload: &adlcv1.Event_RunStarted{RunStarted: &adlcv1.RunStarted{
 		AgentVersion: l.cfg.AgentVersion, Task: l.cfg.Task, Budget: l.cfg.Budget,
+		SandboxImage: l.cfg.SandboxImage,
 	}}}); err != nil {
 		return nil, err
 	}

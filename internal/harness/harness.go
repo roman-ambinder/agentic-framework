@@ -49,6 +49,8 @@ type Config struct {
 	Context contextmgr.Budget
 	// Plan switches on the planning call before step 1 (task Q.4); zero = off.
 	Plan PlanConfig
+	// SandboxImage is the image of the run's sandbox, recorded in run_started; nil = none.
+	SandboxImage *adlcv1.SandboxImage
 }
 
 // PlanCallID is the call id of the planning call; its step is 0 (task Q.4).

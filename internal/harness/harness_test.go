@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	adlcv1 "github.com/roman-ambinder/agentic-framework/gen/go/adlc/v1"
@@ -925,5 +926,26 @@ func TestHarnessRecordsServedModel(t *testing.T) {
 	}
 	if got := events[2].GetCost().GetUsdMicros(); got != 10 {
 		t.Errorf("cost = %d micro-USD, want 10 (priced with Prices[m2])", got)
+	}
+}
+
+func TestRunStartedRecordsSandboxImage(t *testing.T) {
+	tests := []struct {
+		name string
+		img  *adlcv1.SandboxImage
+	}{
+		{"set", &adlcv1.SandboxImage{Ref: "golang:1.26", Id: "sha256:abc"}},
+		{"nil", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := baseConfig()
+			cfg.SandboxImage = tt.img
+			r := runHarness(t, context.Background(), cfg, defaultDeps(t), textTurn("done"))
+			got := r.events[0].GetRunStarted().GetSandboxImage()
+			if !proto.Equal(got, tt.img) {
+				t.Fatalf("sandbox_image = %v, want %v", got, tt.img)
+			}
+		})
 	}
 }

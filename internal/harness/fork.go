@@ -127,7 +127,7 @@ func (l *loop) fork(prefix []*adlcv1.Event, from ForkPoint) (*eventlog.RunState,
 	defer cancel()
 	if _, err := l.add(&adlcv1.Event{Payload: &adlcv1.Event_RunStarted{RunStarted: &adlcv1.RunStarted{
 		AgentVersion: l.cfg.AgentVersion, Task: prefix[0].GetRunStarted().GetTask(), Budget: l.cfg.Budget,
-		ForkedFromRunId: from.RunID, ForkedAtStep: from.AtStep,
+		ForkedFromRunId: from.RunID, ForkedAtStep: from.AtStep, SandboxImage: l.cfg.SandboxImage,
 	}}}); err != nil {
 		return nil, err
 	}
