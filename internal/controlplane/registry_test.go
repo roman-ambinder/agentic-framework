@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -213,10 +214,38 @@ func TestMigrateFromV1(t *testing.T) {
 	}
 	defer s.Close()
 	var v int
-	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil || v != 2 {
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil || v != len(migrations) {
 		t.Fatalf("user_version = %d, %v", v, err)
 	}
 	if kills, err := s.Active(ctx); err != nil || len(kills) != 1 {
 		t.Fatalf("Active = %v, %v", kills, err)
+	}
+}
+
+func TestMigrationAddsPromotionImageID(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "control.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := len(migrations) - 1
+	for _, m := range migrations[:prev] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, prev)); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.db.Exec(`INSERT INTO promotions (name, version, env, report_path, pass_at_1, runs, median_usd_micros, promoted_unix_nano, image_id)
+		VALUES ('a', 1, 'prod', 'r', 1, 1, 0, 1, 'sha256:x')`); err != nil {
+		t.Fatalf("image_id column: %v", err)
 	}
 }

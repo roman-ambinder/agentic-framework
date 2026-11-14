@@ -61,6 +61,8 @@ var migrations = []string{
 	CREATE TRIGGER agent_files_no_delete BEFORE DELETE ON agent_files BEGIN SELECT RAISE(ABORT, 'agent versions are immutable'); END;
 	CREATE TRIGGER promotions_no_update BEFORE UPDATE ON promotions BEGIN SELECT RAISE(ABORT, 'promotions are append-only'); END;
 	CREATE TRIGGER promotions_no_delete BEFORE DELETE ON promotions BEGIN SELECT RAISE(ABORT, 'promotions are append-only'); END;`,
+	// 3: sandbox image of the evidence behind a promotion (task I.6)
+	`ALTER TABLE promotions ADD COLUMN image_id TEXT NOT NULL DEFAULT '';`,
 }
 
 // Store is the control database. It is safe for concurrent use, including by

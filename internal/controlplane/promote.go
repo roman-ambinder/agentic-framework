@@ -3,9 +3,12 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/roman-ambinder/agentic-framework/internal/evals"
+	"github.com/roman-ambinder/agentic-framework/internal/sandbox"
 )
 
 // Gate is what an eval report must show for a promotion.
@@ -24,6 +27,11 @@ type Promotion struct {
 	Runs            int
 	MedianUSDMicros int64
 	PromotedAt      time.Time
+	// ImageID is the one sandbox image all non-errored results ran on; ""
+	// when no result says (old reports).
+	ImageID string
+	// ResultsWithoutImage counts non-errored results of the version with no ImageID.
+	ResultsWithoutImage int
 }
 
 func usd(m int64) string { return fmt.Sprintf("%d.%06d", m/1_000_000, m%1_000_000) }
@@ -40,25 +48,28 @@ func (s *Store) Promote(ctx context.Context, name string, version int, env Env,
 	if err != nil {
 		return Promotion{}, err
 	}
-	ps, err := gateSummary(v, rep, g)
+	ps, imageID, without, err := gateSummary(v, rep, g)
 	if err != nil {
 		return Promotion{}, err
 	}
 	p := Promotion{
 		Name: name, Version: version, Env: env, ReportPath: reportPath,
 		PassAt1: ps.PassAt1, Runs: ps.Runs, MedianUSDMicros: ps.MedianUSDMicrosSolved, PromotedAt: s.now().UTC(),
+		ImageID: imageID, ResultsWithoutImage: without,
 	}
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO promotions (name, version, env, report_path, pass_at_1, runs, median_usd_micros, promoted_unix_nano)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Name, p.Version, string(p.Env), p.ReportPath, p.PassAt1, p.Runs, p.MedianUSDMicros, p.PromotedAt.UnixNano()); err != nil {
+		`INSERT INTO promotions (name, version, env, report_path, pass_at_1, runs, median_usd_micros, promoted_unix_nano, image_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Name, p.Version, string(p.Env), p.ReportPath, p.PassAt1, p.Runs, p.MedianUSDMicros, p.PromotedAt.UnixNano(), p.ImageID); err != nil {
 		return Promotion{}, fmt.Errorf("controlplane: record promotion of %s: %w", v.Ref(), err)
 	}
 	return p, nil
 }
 
-// gateSummary checks that rep proves v and meets g; it returns the summary of v's results.
-func gateSummary(v AgentVersion, rep evals.Report, g Gate) (evals.ProviderSummary, error) {
+// gateSummary checks that rep proves v and meets g; it returns the summary of
+// v's results, the one image they ran on ("" if none says) and how many
+// non-errored results do not say.
+func gateSummary(v AgentVersion, rep evals.Report, g Gate) (evals.ProviderSummary, string, int, error) {
 	ref := v.Ref()
 	var results []evals.Result
 	for _, r := range rep.Results {
@@ -67,21 +78,55 @@ func gateSummary(v AgentVersion, rep evals.Report, g Gate) (evals.ProviderSummar
 		}
 	}
 	if len(results) == 0 {
-		return evals.ProviderSummary{}, fmt.Errorf("%w: no result in the report has agent_digest %s (%s)", ErrReportMismatch, v.Digest, ref)
+		return evals.ProviderSummary{}, "", 0, fmt.Errorf("%w: no result in the report has agent_digest %s (%s)", ErrReportMismatch, v.Digest, ref)
 	}
 	if allErrors(results) {
-		return evals.ProviderSummary{}, fmt.Errorf("%w: all %d results of %s in the report have errors", ErrPromotionRefused, len(results), ref)
+		return evals.ProviderSummary{}, "", 0, fmt.Errorf("%w: all %d results of %s in the report have errors", ErrPromotionRefused, len(results), ref)
+	}
+	imageID, without, err := singleImage(ref, results)
+	if err != nil {
+		return evals.ProviderSummary{}, "", 0, err
 	}
 	ps := evals.Summarize(results).ByProvider[results[0].Provider]
 	if ps.PassAt1 < g.MinPassAt1 {
-		return ps, fmt.Errorf("%w: %s: pass@1 %.3f over %d runs is below the minimum %.3f",
+		return ps, imageID, without, fmt.Errorf("%w: %s: pass@1 %.3f over %d runs is below the minimum %.3f",
 			ErrPromotionRefused, ref, ps.PassAt1, ps.Runs, g.MinPassAt1)
 	}
 	if g.MaxMedianUSDMicros >= 0 && ps.MedianUSDMicrosSolved > g.MaxMedianUSDMicros {
-		return ps, fmt.Errorf("%w: %s: median cost of solved runs $%s is above the maximum $%s",
+		return ps, imageID, without, fmt.Errorf("%w: %s: median cost of solved runs $%s is above the maximum $%s",
 			ErrPromotionRefused, ref, usd(ps.MedianUSDMicrosSolved), usd(g.MaxMedianUSDMicros))
 	}
-	return ps, nil
+	return ps, imageID, without, nil
+}
+
+// singleImage returns the one image ID of the non-errored results (""
+// if none has one) and how many of them have none; two or more distinct IDs
+// are refused.
+func singleImage(ref string, results []evals.Result) (string, int, error) {
+	var ids []string
+	without := 0
+	for _, r := range results {
+		switch {
+		case r.Error != "":
+		case r.ImageID == "":
+			without++
+		case !slices.Contains(ids, r.ImageID):
+			ids = append(ids, r.ImageID)
+		}
+	}
+	if len(ids) >= 2 {
+		slices.Sort(ids)
+		short := make([]string, len(ids))
+		for i, id := range ids {
+			short[i] = sandbox.ShortImageID(id)
+		}
+		return "", 0, fmt.Errorf("%w: %s: the results used %d images (%s); promote from evidence on one image",
+			ErrPromotionRefused, ref, len(ids), strings.Join(short, ", "))
+	}
+	if len(ids) == 1 {
+		return ids[0], without, nil
+	}
+	return "", without, nil
 }
 
 func allErrors(results []evals.Result) bool {
