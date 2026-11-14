@@ -37,13 +37,14 @@ No new dependencies.
 
 - `AGENTS.md`; `docs/impl/m3.md` (all of it: it is the contract; decisions 2, 4, 7, 10, 11 and "The API" matter most)
 - `docs/impl/tasks/W.1-workflow-file.md`, `W.2-workflow-events.md`, `W.3-workflow-engine.md` (what already exists; the helper names W.3 chose)
-- `docs/impl/interfaces.md` §6 (harness `Config`, `Deps`, `KillSwitch`), §7 (CLI wiring), §8 (sandbox, sandbox tools), §11 (C.1 approvals, C.3 kill switch, C.4 registry)
+- `docs/impl/interfaces.md` §6 (harness `Config`, `Deps`, `KillSwitch`), §7 (CLI wiring), §8 (sandbox, sandbox tools), §11 (C.1 approvals, C.3 kill switch, C.4 registry, "CLI (`internal/cli`) — P.5b": sandbox pause in `adlc approve`/`adlc resume`)
 - `docs/impl/tasks/C.1-approvals.md` (CLI conventions: `approverName`, exact output lines, exit codes)
 - `internal/workflow/engine.go` (W.3) — find the two places marked for W.5: the gate check before each task and the export branch
 - `internal/harness/harness.go` (`Config`), `loop.go` (`run`: the `run_started` event), `fork.go` (writes its own `run_started`; not changed)
 - `internal/cli/eval.go` (`evalRunAgent`: how a run gets the sandbox tools), `run.go` (`runOptions`, `loadAgent`, `runAgentWith`), `resume.go`, `approve.go` (`approverName`, `approveRun`), `agentref.go` (`resolveAgentRef`), `controldb.go` (`openKillSwitch`, `defaultControlDBPath`), `wiring.go` (`buildModel`, `buildPlanModel`, `harnessConfig`, `startHooks`), `openlog.go` (`openExistingLog`, `defaultDBPath`), `summary.go` (`formatUSD`), `exit.go`, `root.go`, `cli_test.go`, `approve_test.go`
 - `internal/evals/runner.go` (`changedFiles`, `gitOutput`: why every host git call disables hooks and fsmonitor)
 - `internal/sandbox/sandboxtest/host.go` (`NewHost`: the test sandbox)
+- Sandbox pause (P.1–P.5b): `docs/design/2026-11-14-sandbox-pause-design.md`, `internal/cli/run_sandbox.go` (`runBackend`, `runSandbox`, `finish`), `internal/cli/snapshot.go` (`pendingSnapshot`, `suspend`, `restoreSandbox`, `finishAfterError`, `shortSandboxID`), `internal/sandbox/sandbox.go` (`Suspender`), `internal/cli/resume.go` (`sandboxLookup`, `sandboxSource`, `attachSandbox`, `findLiveSandbox`) — what a workflow child must **not** go through
 
 ## Files
 
@@ -520,7 +521,7 @@ then refuse, wrapping with the reference:
 | Problem | Error |
 |---------|-------|
 | `len(a.Tools) > 0` | `workflow: agent %s declares tools; a workflow task gets the sandbox tools only` |
-| `a.Sandbox != nil` | `workflow: agent %s declares a sandbox; the workflow provides the sandbox` |
+| `a.Sandbox != nil` | `workflow: agent %s declares a sandbox; the workflow provides the sandbox` (this also rules out `sandbox.pause`, m3.md decision 10) |
 
 `checkAgents(ctx)`: for every task of kind agent in file order, `loadAgent`
 its `Agent`, and its `Review.Critic` when set; and for each loaded agent with
@@ -669,59 +670,90 @@ of the table. Same tabwriter settings and `%s\t…\n` format as the list.
 ### Tool approvals inside a workflow (`internal/cli/approve.go`)
 
 m3.md decision 10: a child run that parks for a tool approval parks the
-workflow; after `adlc approve` finishes that run, `adlc workflow resume` picks
-it up. W.3 already does its half: the parked run's sandbox is **kept**
-(labelled `adlc.run_id` = the child run id; its id is in
+workflow; `adlc approve` continues that run; `adlc workflow resume` then picks
+it up. W.3 does the engine's half: the parked run's container is **kept
+running** (labelled `adlc.run_id` = the child run id; its id is in
 `task_finished{AWAITING_APPROVAL}.sandbox_id`, folded into `TaskState.SandboxID`),
 and `adlc workflow resume`, once the run has finished, writes a new
 `task_started` with the **same run id** (a continuation, not a second
-`task_finished` for the parked record), copies that sandbox out, commits and
-destroys it. Today's `adlc approve` cannot continue such a run: it
-builds the tools from the agent file (`buildRun`), but a workflow child's
-tools are the in-process sandbox tool router on that kept sandbox, which the
-agent file does not name. This task adds that path.
+`task_finished` for the parked record), copies that container out, commits
+and destroys it.
+
+**Why the current `adlc approve` cannot do it.** `continueRun` (approve.go)
+resolves the agent, then `attachSandbox(ctx, a, runID, sandboxSource{open: openSandbox, store: store, dbDir: filepath.Dir(o.db)}, stdout)`
+(resume.go), then `buildRun` (tools from the agent file's `tools:`), then
+`harness.Approve`, `printSummary` and `sb.finish(ctx, o.runOptions, store, state, stdout)`
+(run_sandbox.go), and `sb.finishAfterError` (snapshot.go) when building or
+`Approve` fails. For a workflow child every one of these is wrong:
+
+- the agent has no `tools:` and no `sandbox:` section (W.5 refuses both), so
+  `attachSandbox` returns `nil, nil` and `buildRun` gives a router with no
+  tools: the approved call would fail as an unknown tool;
+- `runSandbox.finish` would, on success, copy `/workspace` to
+  `.adlc/workspaces/<run id>` and **destroy the container** the engine still
+  needs, and on a second park would `suspend` it (sandbox pause, P.5b: write a
+  tar, destroy the container, append `sandbox_suspended` to the child run) —
+  m3.md decision 10: workflow children never use `sandbox.pause`; the engine
+  owns their sandbox and keeps it running while parked;
+- `finishAfterError` would do the same after a failure.
+
+So a workflow child gets its own path that uses none of `attachSandbox`,
+`pendingSnapshot`, `restoreSandbox`, `buildRun`, `runSandbox`, `finish`,
+`suspend` or `finishAfterError`. `continueRun` itself is **not changed**.
+
+**`approveRun`** (signature unchanged): after the `o.agentPath == ""` check,
 
 ```go
-// taskSandbox is the sandbox backend for continuing a workflow child run;
-// *docker.Backend implements it.
-type taskSandbox interface {
-	sandbox.Sandbox
-	FindByRunID(ctx context.Context, runID string) ([]sandbox.Handle, error)
-	Close() error
+var state *eventlog.RunState
+if st.WorkflowID != "" {
+	state, err = continueWorkflowRun(ctx, o, store, st, res, openSandbox, stdout)
+} else {
+	state, err = continueRun(ctx, o, store, runID, res, openSandbox, stdout)
 }
 ```
 
-`approveOptions` gets one unexported field `openTaskSandbox func(context.Context) (taskSandbox, error)`
-(nil = `openDockerTaskSandbox`, which wraps `docker.New` like `openSandboxBackend`); tests set it.
-`approveRun`'s signature does not change.
-
-In `continueRun`, after `loadAgent` and `openKillSwitch`, and **before**
-`attachSandbox`: when the run's state (from `CheckApproval`; pass it in) has
-`WorkflowID != ""`, call `continueWorkflowRun` instead of the rest:
+(`st` is the state `harness.CheckApproval` returned; the exit-code lines after
+it stay as they are). The `len(st.PendingApprovals) > 1` branch
+(`resolveOnly`) comes first and touches no sandbox, for both kinds of run.
 
 ```go
 // continueWorkflowRun continues a paused child run of a workflow on the
-// sandbox the engine kept for it, with the same tools, budget and ids.
-func continueWorkflowRun(ctx context.Context, o approveOptions, a *agentconfig.Agent, store *eventlog.Store,
-	st *eventlog.RunState, res harness.Resolution, ks harness.KillSwitch) (*eventlog.RunState, error)
+// container the workflow engine kept for it, with the sandbox tools, the
+// run's own recorded budget and its workflow and task ids. It never suspends,
+// copies out or destroys that container: the engine owns it (m3.md decision 10).
+func continueWorkflowRun(ctx context.Context, o approveOptions, store *eventlog.Store, st *eventlog.RunState,
+	res harness.Resolution, openSandbox func(context.Context) (sandboxLookup, error), stdout io.Writer) (*eventlog.RunState, error)
 ```
 
-1. Refuse `a.Tools` / `a.Sandbox` with W.5's two `loadAgent` errors (workflow agents never have them).
-2. `b, err := open(ctx)`; `defer b.Close()`; `h, err := findLiveSandbox(ctx, b, st.RunID)` (resume.go;
-   `b` satisfies `sandboxLookup`): it finds the container by the `adlc.run_id` label, which
-   needs no workflow log. Its "not running" message is the right one here too. (The workflow
-   log's `sandbox_id` names the same container; `adlc approve` does not open the workflow log.)
-3. `tools := sandboxset.NewRouter(ctx, sandboxtool.Options{Sandbox: b, Handle: h})`; `defer tools.Close()`.
-4. `hooks, closeHooks := startHooks(ctx, a, o.startHook)`; models from `buildModel(a, o.fakeScript)`, `buildPlanModel`.
-5. `cfg := harnessConfig(a, st.RunID, "")`; `cfg.Budget = st.Budget` (the nested budget the run was started
-   with, not the agent's own); `cfg.WorkflowID, cfg.TaskID = st.WorkflowID, st.TaskID`; `cfg.Hooks = hooks`.
-6. `return harness.Approve(ctx, cfg, harness.Deps{Log: store, Model, PlanModel, Tools: tools, Policy: a.PolicyEngine(), KillSwitch: ks}, res)`.
-   The sandbox is **not** destroyed: `adlc workflow resume` copies its workspace out and destroys it.
+1. `ro, cleanupRef, err := resolveAgentRef(ctx, o.runOptions)`; `defer cleanupRef()`; `a, err := loadAgent(ro)` (as `continueRun`).
+2. `len(a.Tools) > 0` or `a.Sandbox != nil` → the two errors of `workflowWiring.loadAgent`
+   (an agent with `sandbox:` — and so `sandbox.pause` — is never a workflow agent).
+3. `ks, closeKS, err := openKillSwitch(ctx, o.controlDB)`; `defer closeKS()`.
+4. `b, err := openSandbox(ctx)`; `defer b.Close()` (closes the connection only, the container stays).
+   `h, err := findLiveSandbox(ctx, b, st.RunID)` (resume.go): found by the `adlc.run_id` label and
+   probed with `true`; its "is not running" error is the right message (no snapshot exists to restore).
+   `adlc approve` does not open the workflow log; the label names the same container as `sandbox_id`.
+5. `tools, err := sandboxset.NewRouter(ctx, sandboxtool.Options{Sandbox: b, Handle: h})` —
+   `sandboxLookup` (= `runBackend` + `Exec`) has `Create`, `Exec`, `CopyOut` and `Destroy`, so it
+   is a `sandbox.Sandbox`; `defer tools.Close()`.
+6. `hooks, closeHooks, err := startHooks(ctx, a, o.startHook)`; `defer closeHooks()`;
+   `m := buildModel(a, o.fakeScript)`; `pm := buildPlanModel(a, o.fakeScript)`.
+7. `cfg := harnessConfig(a, st.RunID, "")`; `cfg.Budget = st.Budget` (the nested budget the run
+   started with, not the agent's own); `cfg.WorkflowID, cfg.TaskID = st.WorkflowID, st.TaskID`;
+   `cfg.Hooks = hooks`.
+8. `state, err := harness.Approve(ctx, cfg, harness.Deps{Log: store, Model: m, PlanModel: pm, Tools: tools,
+   Policy: a.PolicyEngine(), KillSwitch: ks}, res)`; error → return it (the container keeps running;
+   nothing else is done).
+9. `printSummary(stdout, state)`, then one line:
+   - the run parked again (`state.Status == eventlog.StatusPaused`):
+     `workflow: run <run id> is task <task id> of workflow <workflow id>; it waits for another approval (adlc approvals); sandbox <shortSandboxID(h.ID)> keeps running`
+   - otherwise:
+     `workflow: run <run id> is task <task id> of workflow <workflow id>; continue it with: adlc workflow resume <workflow id> FILE`
+10. Return `state`. Exit codes stay as in `approveRun` (0 completed, 2 otherwise — also when it parked again).
 
-After `printSummary`, `approveRun` prints for such a run one more line:
-`workflow: run <run id> is task <task id> of workflow <workflow id>; continue it with: adlc workflow resume <workflow id> FILE`.
-The exit code rule is unchanged (0 completed, 2 otherwise).
-`ResolveApproval` (more than one pending approval) needs no change.
+No `sandbox_suspended` or `sandbox_restored` event is ever written to a
+workflow child run: `workflowWiring.runTask` calls `harness.Run` directly
+(never `runAgentWith`/`runSandbox`), and this path never calls `finish`.
 
 ### `interfaces.md`
 
@@ -768,7 +800,7 @@ switch, hooks, the nested budget and `Config.WorkflowID`/`TaskID`."
 6. `export_test.go`; break `-c core.hooksPath=/dev/null` once and see `TestExportRunsNoHooks` fail.
 7. The validation rule and its row in W.1's validate test.
 8. `internal/cli/workflow.go`, `workflow_print.go`, the testdata files, `root.go`; then `workflow_test.go`, `cli_test.go`.
-9. `approve.go`: `taskSandbox`, `continueWorkflowRun`, the extra line; its tests.
+9. `approve.go`: the branch in `approveRun` and `continueWorkflowRun` (`continueRun` unchanged); its tests.
 10. `interfaces.md`.
 11. `make fmt && make ci`.
 
@@ -927,8 +959,9 @@ temp dir, `inputs: ["repo=<repo>"]`, `fakeScripts: ["writer=<tmp>/writer.fake.js
 | `TestParseInputs` | table for every row of the inputs table plus a valid case (dir and file made absolute, text kept) |
 | `TestParseFakeScripts` | `a=p` ok; `a`, `=p`, `a=` rejected; `a=p a=q` rejected |
 | `TestWorkflowAgentPath` | `Dir "/wf"`: `writer.yaml` → `/wf/writer.yaml`; `/x/a.yaml` → `/x/a.yaml`; `coder@1`, `coder@prod` → unchanged |
-| `TestApproveContinuesWorkflowChildRun` (`workflow_test.go`) | `flow.yaml` with `writer.yaml`'s `write` rule set to `decision: needs_approval`; one `recordingHost` (a `sandboxtest.Host` that remembers `Spec.RunID` → handle and implements `FindByRunID` and `Close`) serves both `workflowRun` and `approveOptions.openTaskSandbox`. `workflowRun` → code 0, status `awaiting_approval`, a `next:` line `adlc approve a-call_1 <child run id> AGENT_YAML, then adlc workflow resume …`; `approveRun(ctx, o, "a-call_1", <child>, …)` with a fake script holding only the turn `Wrote out.txt.` → code 0, `stop:    completed`, the extra `workflow:` line; the child's last events are `tool_call_completed`, `checkpoint`, …, `run_completed{COMPLETED}`; then `workflowResume` → the workflow log gets a new `task_started` for `write` with the **same** run id (`<workflow id>-1`) and then `task_finished{PASSED}` whose commit has `out.txt`; no second record for the parked run; the workflow parks at the `release` gate; the recorded sandbox was destroyed |
-| `TestApproveWorkflowChildSandboxGone` | as above, but destroy the kept sandbox before `approveRun` → code 1, stderr contains `is not running`; nothing appended to the child run |
+| `TestApproveContinuesWorkflowChildRun` (`workflow_test.go`) | `flow.yaml` with `writer.yaml`'s `write` rule set to `decision: needs_approval`. One `workflowBackend` serves both `workflowRun` (as `openWorkflowSandbox`) and `approveRun` (as its `openSandbox`): it embeds a `sandboxtest.Host`, remembers `Spec.RunID` → handle on `Create`, implements `FindByRunID`, `Close` (no-op), and `Suspend`/`Restore` that call `t.Fatal` (they must never run), and counts `Destroy`. `workflowRun` → code 0, status `awaiting_approval`, a `next:` line `adlc approve a-call_1 <workflow id>-1 AGENT_YAML, then adlc workflow resume …`; `approveRun(ctx, o, "a-call_1", <workflow id>-1, stdout, backend opener)` with a fake script holding only the turn `Wrote out.txt.` → code 0, `stop:    completed`, the `continue it with: adlc workflow resume` line; no `workspace:` line and no `.adlc/workspaces` directory; `Destroy` not called; the child log has no `sandbox_suspended`; then `workflowResume` → the workflow log gets a new `task_started` for `write` with the **same** run id and then `task_finished{PASSED}` whose commit has `out.txt`; no second record for the parked run; the workflow parks at the `release` gate; now `Destroy` was called once |
+| `TestApproveWorkflowChildParksAgain` | the writer script's first turn has two write calls (`call_1`, `call_2`); after `approveRun` for `a-call_1` the run parks again on `a-call_2` → code 2, the `waits for another approval … keeps running` line; `Suspend` and `Destroy` not called; no `sandbox_suspended` in the child log; `findLiveSandbox` still finds the container; approving `a-call_2` then completes the run |
+| `TestApproveWorkflowChildSandboxGone` | as above, but destroy the kept container before `approveRun` → code 1, stderr contains `is not running`; nothing appended to the child run; `Restore` not called |
 | `TestApproveWorkflowChildUsesRunBudget` | as `TestApproveContinuesWorkflowChildRun`, with `flow.yaml` `budget: {max_tokens: 100}` (the child's nested `max_tokens` is 100; `writer.yaml` has none); the approve script is two turns: a `files__list_dir` call with usage 20/20, then `Done.` → the continued run stops `budget_exhausted` before the second model call (70 + 40 tokens ≥ 100); exit code 2. With the agent's own budget it would have completed |
 
 `cli_test.go`: add `"workflow run": newWorkflowRunCmd()`, `"workflow resume": newWorkflowResumeCmd()`,
@@ -941,6 +974,7 @@ temp dir, `inputs: ["repo=<repo>"]`, `fakeScripts: ["writer=<tmp>/writer.fake.js
 ```bash
 go test -race ./internal/harness/ -run 'WorkflowAndTask|WithoutWorkflow' -v      # PASS
 go test ./internal/harness/                                                     # existing tests unchanged, PASS
+go test ./internal/cli/ -run 'Approv|Resume|Snapshot|RunSandbox' -v              # existing C.1 and P.5b tests unchanged, PASS
 go test -race ./internal/workflow/ -run 'Gate|Export|ValidateExport' -v          # all PASS
 go test -race ./internal/cli/ -run 'Workflow|ParseInputs|ParseFakeScripts|ApproveRefusesWorkflow|CommandsShare' -v   # all PASS
 make ci                                                                         # passes
@@ -973,6 +1007,7 @@ git -C "$repo" status --porcelain              # empty
 
 ## Pitfalls
 
+- A workflow child run must never reach `attachSandbox`, `runSandbox.finish`, `suspend` or `finishAfterError`: they copy out, destroy or suspend the container the engine still owns. Branch in `approveRun` before `continueRun`.
 - Every git call on the person's repository goes through `repoGit` (hooks and fsmonitor off). `update-ref` runs the `reference-transaction` hook if hooks are on.
 - Never use the repository's own index: `GIT_INDEX_FILE` must point at the private `export.index` for `read-tree`, `apply --cached` and `write-tree`, and must not be set for any other call.
 - The empty last argument of `update-ref` is what makes git refuse an existing branch. Do not drop it, and do not check-then-create without it.
@@ -994,7 +1029,7 @@ git -C "$repo" status --porcelain              # empty
 - [ ] The export validation rule added to W.1's `Validate`
 - [ ] `adlc workflow run|resume|approve|status` registered, with the exact output and exit codes, and tests
 - [ ] Child runs get sandbox tools, hooks, the kill switch, `NAME@N` refs, the nested budget and the workflow/task ids (tests)
-- [ ] `adlc approve` continues a workflow child run on its kept sandbox; `adlc workflow resume` then collects it (test)
+- [ ] `adlc approve` continues a workflow child run on its kept container, never suspends, copies out or destroys it (also when it parks again); `adlc workflow resume` then collects it (tests); `continueRun` and the P.5b paths unchanged
 - [ ] `interfaces.md` §6 updated and the W.5 subsection appended to §12
 - [ ] No change to `events.proto`, `internal/eventlog`, W.2's fold or W.4's `review.go`
 - [ ] `make ci` passes

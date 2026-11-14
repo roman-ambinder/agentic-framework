@@ -870,6 +870,7 @@ The README demo, by hand with Docker: the first command ends with
 
 ## Pitfalls
 
+- The demo and sdlc agent files have no `sandbox:` section (so no `sandbox.pause`): W.5 refuses such agents in a workflow, because the engine owns the task sandbox (m3.md decision 10).
 - No model id and no price anywhere: `${ADLC_*_MODEL}` and `${ADLC_*_PRICE_*}` only; fake agents need neither.
 - The fake scripts' `arguments` are JSON objects; Go source inside them escapes `"` as `\"`, newlines as `\n` and tabs as `\t`. Check with `go test` (the demo test fails on a broken script).
 - Each fake script starts from its first turn in every child run (W.5 builds a new fake model per run); the demo passes every check the first time on purpose.
