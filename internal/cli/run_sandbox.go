@@ -45,6 +45,9 @@ type runSandbox struct {
 	runID   string
 	// suspends is false for `pause: keep`: the container stays while paused.
 	suspends bool
+	// spec is what the sandbox was created (or restored) from; a failed
+	// pause record restores from it.
+	spec sandbox.Spec
 }
 
 // startRunSandbox creates the sandbox the agent declares and puts its id into
@@ -64,7 +67,7 @@ func startRunSandbox(ctx context.Context, a *agentconfig.Agent, runID string, op
 		return nil, fmt.Errorf("run: create sandbox: %w", err)
 	}
 	expandSandboxID(a, h)
-	return &runSandbox{backend: b, handle: h, runID: runID, suspends: a.Sandbox.Suspends()}, nil
+	return &runSandbox{backend: b, handle: h, runID: runID, suspends: a.Sandbox.Suspends(), spec: spec}, nil
 }
 
 // expandSandboxID replaces {{sandbox_id}} in every tool command.

@@ -207,7 +207,7 @@ func attachSandbox(ctx context.Context, a *agentconfig.Agent, runID string, src 
 		return nil, err
 	}
 	expandSandboxID(a, h)
-	return &runSandbox{backend: b, handle: h, runID: runID, suspends: hasSpec && a.Sandbox.Suspends()}, nil
+	return &runSandbox{backend: b, handle: h, runID: runID, suspends: hasSpec && a.Sandbox.Suspends(), spec: spec}, nil
 }
 
 func findLiveSandbox(ctx context.Context, b sandboxLookup, runID string) (sandbox.Handle, error) {
