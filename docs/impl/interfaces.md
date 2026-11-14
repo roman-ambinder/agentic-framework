@@ -875,6 +875,32 @@ Defaults (task 1.4.2): no network unless `Network`; user 65532:65532; all
 capabilities dropped; 512 processes; `HOME=/tmp` unless set; the workspace
 is copied in, never bind-mounted.
 
+Suspend and restore (task P.2): a backend that can save `/workspace` to a
+file and free the container also implements `Suspender` (files only; no
+process checkpoints yet).
+
+```go
+type Suspender interface {
+	Suspend(ctx context.Context, h Handle, tarPath string) (Snapshot, error)
+	Restore(ctx context.Context, spec Spec, snap Snapshot) (Handle, error)
+}
+type Snapshot struct {
+	TarPath          string // absolute path of the /workspace archive
+	SHA256           string // "sha256:<hex>" of the file at TarPath
+	Bytes            int64
+	ImageID          string // image ID the container ran
+	ProcessesSkipped string // why processes were not kept
+}
+var (
+	ErrSnapshotChanged = errors.New("sandbox: snapshot file changed")
+	ErrImageGone       = errors.New("sandbox: snapshot image is gone")
+)
+const ProcessesNotSupported = "process checkpoints are not supported yet"
+```
+
+Test double: `sandboxtest.Pausable` (in memory; also has `Live`,
+`FindByRunID`, `Close`).
+
 Test double: `internal/sandbox/sandboxtest.Host` (`NewHost(dir)`) runs
 commands on the host in a temp copy — no isolation, tests only.
 
