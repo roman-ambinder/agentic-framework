@@ -280,6 +280,23 @@ sandbox:
   the work plan's decision log. If it fails only with the default seccomp
   profile, do **not** relax seccomp by default (anti-goal); the files path
   still works, and relaxing is a separate decision for the owner.
+- **Spike result (2026-11-14).** Host: Ubuntu 24.04, kernel 6.18.44
+  (`CONFIG_CHECKPOINT_RESTORE=y`), Docker 29.9.2 with `--experimental`,
+  runc 1.5.2, CRIU 4.3 from `ppa:criu/ppa` (`criu check`: "Looks good.").
+  Test: busybox container, a counter started with `docker exec -d`, then
+  `docker checkpoint create` and `docker start --checkpoint`.
+  - Checkpoint **succeeds** with `--network none`, `--init`, `--cap-drop ALL`,
+    `no-new-privileges`, and pids/memory limits, each tested on its own.
+  - Checkpoint **fails** with `--user 65532:65532` (adlc's sandbox user):
+    CRIU logs "Can't get rlimit 0: Operation not permitted".
+  - Restore **fails in every case**, including a container with default
+    settings: `bind-mount /proc/0/ns/net -> /var/run/docker/netns/...: no such
+    file or directory`. Restoring into a new container with
+    `--checkpoint-dir` is refused: "custom checkpointdir is not supported".
+  - Conclusion: on this Docker version the process path (P.4) cannot work,
+    independent of adlc's settings. P.4 is deferred until a Docker version
+    where restore works is found; the files path (P.1–P.3, P.5) does not
+    depend on it.
 - **`docker exec` processes.** It is not verified that processes started via
   `exec` (how adlc's tools run commands) are restored correctly; the spike
   must test exactly that.
