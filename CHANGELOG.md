@@ -3,9 +3,9 @@
 All notable changes. Versions follow the work plan (§7): `v0.1.0` after M0,
 `v0.2.0` after M1.
 
-## Unreleased — M2-C (control plane) and part of M2-Q
+## Unreleased — M2-C (control plane) and M2-Q (agent quality)
 
-On `integration`, not yet on `main`.
+C.1–C.4 and Q.1–Q.2 are on `main` (PR #11); Q.3–Q.5 are on `integration`.
 
 ### Control plane (C.1–C.4)
 - `adlc approvals` lists runs waiting for an approval; `adlc approve` answers one (`--reject`, `--comment`, `--by`) and continues the run in place when no approval is left (C.1).
@@ -15,6 +15,11 @@ On `integration`, not yet on `main`.
 
 ### Evals (Q.1, Q.2)
 - `adlc eval --repeat N`, pass@k, `adlc eval-compare`; `adlc eval-report --failures` names the top failure causes.
+
+### Agent quality (Q.3–Q.5)
+- `adlc fork RUN_ID AGENT --at-step N` continues a run's transcript from a checkpoint with another agent; `run_started` records `forked_from_run_id` and `forked_at_step` (Q.3).
+- Optional `planning:` section: one tool-less planning call before step 1, kept in every later request; counts toward token and cost budgets, not max_steps; off by default (Q.4).
+- `model.roles.plan` gives the planning call its own provider, model, effort and pricing (Q.5).
 
 ## Unreleased — proposed v0.2.0
 

@@ -226,3 +226,44 @@ func TestTranscriptIgnoresRunResumed(t *testing.T) {
 		t.Fatalf("got %d messages, want only the task", len(got))
 	}
 }
+
+func msgTexts(msgs []model.Message) []string {
+	out := make([]string, len(msgs))
+	for i, m := range msgs {
+		out[i] = string(m.Role) + ":" + m.Text()
+	}
+	return out
+}
+
+func TestTranscriptPlanMessages(t *testing.T) {
+	msgs, err := Transcript([]*adlcv1.Event{
+		evStarted(),
+		evModel(&adlcv1.ModelCallCompleted{CallId: PlanCallID, Text: "P"}),
+		evModel(&adlcv1.ModelCallCompleted{CallId: "m1", Text: "done"}),
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		string(model.RoleUser) + ":task", string(model.RoleAssistant) + ":P",
+		string(model.RoleUser) + ":" + PlanFollowUp, string(model.RoleAssistant) + ":done",
+	}
+	if got := msgTexts(msgs); !reflect.DeepEqual(got, want) {
+		t.Fatalf("messages = %q, want %q", got, want)
+	}
+}
+
+func TestTranscriptEmptyPlanAddsNothing(t *testing.T) {
+	msgs, err := Transcript([]*adlcv1.Event{
+		evStarted(),
+		evModel(&adlcv1.ModelCallCompleted{CallId: PlanCallID, Text: ""}),
+		evModel(&adlcv1.ModelCallCompleted{CallId: "m1", Text: "done"}),
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{string(model.RoleUser) + ":task", string(model.RoleAssistant) + ":done"}
+	if got := msgTexts(msgs); !reflect.DeepEqual(got, want) {
+		t.Fatalf("messages = %q, want %q", got, want)
+	}
+}

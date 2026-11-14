@@ -57,14 +57,20 @@ func (a *Agent) Price() model.Price {
 	return priceOf(a.Model.Pricing)
 }
 
-// Prices returns the price of the primary model and of every fallback, keyed
-// by model name. If two candidates share a name, the primary's price wins.
+// Prices returns the price of the primary model, of every fallback and of the
+// plan role (task Q.5), keyed by model name. If two share a name, the first
+// wins: primary, then fallbacks, then the role.
 // Call only after Validate succeeded.
 func (a *Agent) Prices() map[string]model.Price {
 	out := map[string]model.Price{a.Model.Name: a.Price()}
 	for _, f := range a.Model.Fallbacks {
 		if _, ok := out[f.Name]; !ok {
 			out[f.Name] = priceOf(f.Pricing)
+		}
+	}
+	if r := a.Model.Roles.Plan; r != nil {
+		if _, ok := out[r.Name]; !ok {
+			out[r.Name] = priceOf(r.Pricing)
 		}
 	}
 	return out

@@ -535,12 +535,40 @@ type Config struct {
 	// Context limits the size of each model request (task 1.6.1).
 	// MaxInputTokens 0 = derived from the adapter's MaxContextTokens.
 	Context contextmgr.Budget
+	Plan    PlanConfig // task Q.4: planning call before step 1; zero = off
+}
+
+// PlanCallID is the call id of the planning call; its step is 0 (task Q.4).
+const PlanCallID = "plan"
+
+// DefaultPlanMaxTokens is PlanConfig.MaxTokens when it is zero.
+const DefaultPlanMaxTokens = 1024
+
+// DefaultPlanPrompt is PlanConfig.Prompt when it is empty.
+const DefaultPlanPrompt = "Before you start, write a short plan for this task: a numbered list of at most 7 steps, one line each, naming the files or tools you expect to use. Do not start the work yet and do not call any tools; reply with the plan only."
+
+// PlanFollowUp is the user message Transcript puts after the plan, so that a
+// request never ends with the assistant's own message.
+const PlanFollowUp = "Now carry out the plan above. Change it if you learn something that makes it wrong."
+
+// PlanConfig controls the planning call before step 1 (task Q.4). The zero
+// value means no planning call.
+type PlanConfig struct {
+	Enabled   bool
+	Prompt    string // sent after the task in the plan request; "" = DefaultPlanPrompt
+	MaxTokens int    // output limit of the plan call; 0 = DefaultPlanMaxTokens
+	// Model is the model id of the plan call (task Q.5); "" = Config.Model,
+	// and then Config.Effort is used as well.
+	Model string
+	// Effort of the plan call; used only when Model is set ("" = adapter default).
+	Effort string
 }
 
 // Deps are the run's collaborators.
 type Deps struct {
 	Log    Log
 	Model  model.Adapter
+	PlanModel model.Adapter // task Q.5: adapter of the plan call; nil = Model
 	Tools  toolrouter.Router
 	Policy policy.Client
 	Now    func() time.Time                                  // default time.Now
@@ -598,6 +626,19 @@ func VerifyCheckpoints(events []*adlcv1.Event) error
 
 // Resume continues a run that stopped without a final run_completed (task 1.7).
 func Resume(ctx context.Context, cfg Config, deps Deps) (*eventlog.RunState, error)
+
+// Fork starts cfg.RunID from the transcript of from.RunID up to and including
+// the checkpoint of step from.AtStep, then continues it with cfg (task Q.3).
+type ForkPoint struct {
+	RunID  string
+	AtStep uint32
+}
+func Fork(ctx context.Context, cfg Config, deps Deps, from ForkPoint) (*eventlog.RunState, error)
+func ForkEvents(events []*adlcv1.Event, atStep uint32) ([]*adlcv1.Event, error)
+var (
+	ErrNoCheckpoint = errors.New("harness: no checkpoint for that step")
+	ErrRunExists    = errors.New("harness: run already exists")
+)
 var (
 	ErrRunFinished        = errors.New("harness: run already finished")
 	ErrRunPaused          = errors.New("harness: run is waiting for approval")
@@ -659,6 +700,12 @@ every request through one `contextmgr.Manager` per run.
 ### §6.1 Events the harness writes, per step
 
 One *step* = one successful model call plus the tool calls it asked for.
+
+```
+When Config.Plan.Enabled, before step 1: model_call_started {call_id: "plan", step: 0}
+… model_call_completed (no tool calls, no checkpoint). It counts towards tokens and cost, not max_steps.
+Transcript turns it into an assistant message followed by the user message PlanFollowUp.
+With Deps.PlanModel (task Q.5) the plan's model_call_started has provider PlanModel.Provider() and model Plan.Model; its cost uses Prices[response model].
 
 ```
 model_call_started   {call_id: "m<step>", step, provider, model, attempt}
@@ -731,6 +778,8 @@ Task 1.6.1 adds the optional `context:` section (`max_input_tokens`,
 `keep_recent_steps`, both >= 0) and `(*Agent).ContextBudget() contextmgr.Budget`,
 which the CLI wiring assigns to `harness.Config.Context`.
 
+Task Q.4 adds the optional `planning:` section (enabled, prompt, max_tokens 0..1000000); harnessConfig maps it to harness.Config.Plan.
+
 Task C.2 adds `policy.include` (policy files, `PolicyFile{include, rules}`, paths relative to the naming file, no
 `default`), `args` matchers and tool globs in rules, and
 `Policy.Included []IncludedRule`; `PolicyEngine` evaluates included rules
@@ -744,6 +793,11 @@ on the model the user picks, so agent files in `agents/` use this form.
 
 Task 1.3 adds `model.fallbacks` and `(*Agent).Prices() map[string]model.Price`.
 A fallback must not set `max_tokens` or `effort` (validation rejects them): the harness sends the primary's values and the router passes them through.
+
+Task Q.5 adds model.roles.plan (provider, name, effort, pricing; ${VAR} as for fallbacks; max_tokens,
+fallbacks and roles are rejected; ignored while planning is disabled). Prices() includes it (primary, then
+fallbacks, then the role; the first price for a name wins). Wiring: buildPlanModel(a, fakeScript)
+(model.Adapter, error), nil without a role.
 
 CLI wiring (task 0.9.2, `internal/cli/wiring.go`, unexported, shared by
 `adlc run`, `adlc resume` (1.7) and `adlc eval` (1.8)):

@@ -39,7 +39,7 @@ func Transcript(events []*adlcv1.Event, maxToolOutputBytes int) ([]model.Message
 			})
 		case *adlcv1.Event_ModelCallCompleted:
 			flush()
-			msgs = append(msgs, assistantMessage(p.ModelCallCompleted))
+			msgs = append(msgs, modelMessages(p.ModelCallCompleted)...)
 		case *adlcv1.Event_ToolCallCompleted:
 			c := p.ToolCallCompleted
 			text, _ := toolrouter.ForModel(c.GetOutput(), maxToolOutputBytes)
@@ -50,6 +50,22 @@ func Transcript(events []*adlcv1.Event, maxToolOutputBytes int) ([]model.Message
 	}
 	flush()
 	return msgs, nil
+}
+
+// modelMessages returns the messages of one model_call_completed: the
+// assistant message, or for the planning call (task Q.4) the plan followed by
+// PlanFollowUp, or nothing when the plan is empty.
+func modelMessages(c *adlcv1.ModelCallCompleted) []model.Message {
+	if c.GetCallId() != PlanCallID {
+		return []model.Message{assistantMessage(c)}
+	}
+	if c.GetText() == "" {
+		return nil
+	}
+	return []model.Message{
+		{Role: model.RoleAssistant, Parts: []model.Part{model.TextPart(c.GetText())}},
+		{Role: model.RoleUser, Parts: []model.Part{model.TextPart(PlanFollowUp)}},
+	}
 }
 
 // assistantMessage rebuilds the model's message: text, then tool calls, with

@@ -420,3 +420,120 @@ func TestHookPlugins(t *testing.T) {
 		t.Errorf("hook b = %+v", got[1])
 	}
 }
+
+func TestPlanningConfig(t *testing.T) {
+	const head = "name: a\nversion: 1\nmodel: {provider: fake}\npolicy: {default: deny}\n"
+	tests := []struct {
+		name string
+		yaml string
+		want Planning
+		err  string
+	}{
+		{name: "absent", yaml: head, want: Planning{}},
+		{name: "set", yaml: head + "planning: {enabled: true, prompt: \"p\", max_tokens: 10}\n", want: Planning{Enabled: true, Prompt: "p", MaxTokens: 10}},
+		{name: "negative", yaml: head + "planning: {max_tokens: -1}\n", err: "planning.max_tokens: must be between 0 and 1000000, got -1"},
+		{name: "too big", yaml: head + "planning: {max_tokens: 1000001}\n", err: "planning.max_tokens: must be between 0 and 1000000, got 1000001"},
+		{name: "unknown key", yaml: head + "planning: {enabld: true}\n", err: `unknown field "enabld"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, err := Parse([]byte(tt.yaml))
+			if tt.err != "" {
+				wantErr(t, err, tt.err)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if a.Planning != tt.want {
+				t.Fatalf("Planning = %+v, want %+v", a.Planning, tt.want)
+			}
+		})
+	}
+}
+
+// planRoleYAML is a valid agent with a plan role; the names come from the environment.
+const planRoleYAML = `name: a
+version: 1
+model:
+  provider: anthropic
+  name: ${ADLC_TEST_MODEL}
+  pricing: {input_per_mtok: "3", output_per_mtok: "15"}
+  roles:
+    plan:
+      provider: openai
+      name: ${ADLC_TEST_PLAN_MODEL}
+      effort: low
+      pricing:
+        input_per_mtok: "1"
+        output_per_mtok: "2"
+planning: {enabled: true}
+policy: {default: deny}
+`
+
+func TestPlanRoleConfig(t *testing.T) {
+	t.Setenv("ADLC_TEST_MODEL", "primary-1")
+	t.Setenv("ADLC_TEST_PLAN_MODEL", "plan-1")
+	t.Run("valid role loads", func(t *testing.T) {
+		a, err := Parse([]byte(planRoleYAML))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := a.Model.Roles.Plan
+		if r == nil || r.Provider != "openai" || r.Name != "plan-1" || r.Effort != "low" {
+			t.Errorf("Roles.Plan = %+v", r)
+		}
+	})
+	rep := func(old, new string) string { return strings.Replace(planRoleYAML, old, new, 1) }
+	after := func(line string) string { return rep("      effort: low\n", "      effort: low\n"+line+"\n") }
+	tests := []struct{ name, yaml, want string }{
+		{"missing name", rep("      name: ${ADLC_TEST_PLAN_MODEL}\n", ""), `model.roles.plan.name: is required`},
+		{"env missing", rep("ADLC_TEST_PLAN_MODEL}", "ADLC_TEST_NOPE}"), `model.roles.plan.name: environment variable ADLC_TEST_NOPE is not set`},
+		{"unknown provider", rep("provider: openai", "provider: nope"), `model.roles.plan.provider: must be one of fake, anthropic, openai, got "nope"`},
+		{"max_tokens", after("      max_tokens: 100"), `model.roles.plan.max_tokens: not supported on roles (planning.max_tokens is used)`},
+		{"bad effort", rep("effort: low", "effort: huge"), `model.roles.plan.effort: must be one of low, medium, high, xhigh, max, got "huge"`},
+		{"fallbacks", after("      fallbacks: [{provider: openai, name: x}]"), `model.roles.plan.fallbacks: not allowed`},
+		{"nested roles", after("      roles: {plan: {provider: openai, name: x}}"), `model.roles.plan.roles: not allowed`},
+		{"act role", rep("    plan:", "    act:"), `unknown field "act"`},
+		{"bad price", rep(`        input_per_mtok: "1"`, `        input_per_mtok: x`), `model.roles.plan.pricing.input_per_mtok: "x" is not a decimal amount`},
+		{"price env missing", rep(`        input_per_mtok: "1"`, `        input_per_mtok: ${ADLC_TEST_NOPE}`), `model.roles.plan.pricing.input_per_mtok: environment variable ADLC_TEST_NOPE is not set`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.yaml))
+			wantErr(t, err, tt.want)
+		})
+	}
+}
+
+func TestFallbackRolesRejected(t *testing.T) {
+	t.Setenv("ADLC_TEST_MODEL", "primary-1")
+	t.Setenv("ADLC_TEST_FALLBACK", "fallback-1")
+	y := strings.Replace(fallbackYAML, "      pricing:", "      roles: {plan: {provider: openai, name: x}}\n      pricing:", 1)
+	_, err := Parse([]byte(y))
+	wantErr(t, err, `model.fallbacks[0].roles: not allowed`)
+}
+
+func TestPlanRolePrices(t *testing.T) {
+	t.Setenv("ADLC_TEST_MODEL", "primary-1")
+	t.Setenv("ADLC_TEST_PLAN_MODEL", "plan-1")
+	a, err := Parse([]byte(planRoleYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]model.Price{
+		"primary-1": {InputPerMTok: 3_000_000, OutputPerMTok: 15_000_000},
+		"plan-1":    {InputPerMTok: 1_000_000, OutputPerMTok: 2_000_000},
+	}
+	if got := a.Prices(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Prices() = %+v, want %+v", got, want)
+	}
+	t.Setenv("ADLC_TEST_PLAN_MODEL", "primary-1")
+	a, err = Parse([]byte(planRoleYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Prices()["primary-1"].InputPerMTok; got != 3_000_000 {
+		t.Errorf("Prices[primary-1].InputPerMTok = %d, want the primary's 3000000", got)
+	}
+}
