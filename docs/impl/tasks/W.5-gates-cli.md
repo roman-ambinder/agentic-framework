@@ -1,6 +1,6 @@
-# W.5 — Gates, export and `adlc workflow`
+# W.5 — Gates, export, `adlc workflow`, `adlc approve` for workflow runs
 
-Size: M · Depends on: W.3 · Branch: `task/W.5-gates-cli` · PR title: `W.5: human gates, export to a local branch and adlc workflow`
+Size: L · Depends on: W.3 · Branch: `task/W.5-gates-cli` · PR title: `W.5: gates, export to a local branch, adlc workflow, adlc approve for workflow runs`
 
 ## Goal
 
@@ -77,7 +77,7 @@ internal/cli/approve.go             continue a workflow child run on its kept sa
 internal/cli/approve_test.go        tests for that
 internal/cli/root.go                one AddCommand line                              (shared file)
 internal/cli/cli_test.go            add the workflow commands to the shared-default tests
-docs/impl/interfaces.md             §6 Config fields; the M3 section: gates, export, CLI (shared file)
+docs/impl/interfaces.md             §6 Config fields; a subsection appended to §12: gates, export, CLI (shared file)
 ```
 
 Do not change `events.proto`, `internal/eventlog`, `fold.go` of `internal/workflow`
@@ -218,7 +218,7 @@ spent: $<usd with 6 decimals>, <tokens> tokens, <n> run|runs
 Example (the test fixture below):
 
 ```
-workflow flow@1-20261114T100000Z-0a1b2c waits for approval before task "release"
+workflow flow-v1-20261114T100000Z-0a1b2c waits for approval before task "release"
 passed: write
 changes: 1 file changed, 1 insertion(+)
 spent: $0.001000, 150 tokens, 1 run
@@ -229,7 +229,7 @@ spent: $0.001000, 150 tokens, 1 run
 1. `by == ""` → `errors.New("workflow: resolve gate: resolved by is empty")` (before reading anything).
 2. `st, events, err := e.fold(ctx, id)` (no events → W.3's `ErrWorkflowNotFound` error).
 3. `st.Digest != w.Digest` → the same `ErrWorkflowChanged` error W.3's `Resume` returns (same text).
-4. `st.Status == "completed"` → the same `ErrWorkflowFinished` error W.3's `Resume` returns.
+4. `st.Status == StatusCompleted` → the same `ErrWorkflowFinished` error W.3's `Resume` returns.
 5. `ts := st.Tasks[taskID]`; `ts == nil || !ts.GatePending` →
    `fmt.Errorf("%w: task %q of workflow %q", ErrNoPendingGate, taskID, id)`. Nothing is appended in steps 1–5.
 6. Append `gate_resolved{task_id: taskID, approved, resolved_by: by, comment}`,
@@ -250,10 +250,10 @@ const ExportInput = "repo"
 (W.3 has an unexported `repoInput = "repo"` for the same input; make it
 `repoInput = ExportInput` so the two cannot drift.)
 
-What W.3 guarantees about the workspace: it starts as `git archive` of the
-**tree of `repo`'s HEAD at Start** (committed files only, no symlinks), and
-the workflow's `base` commit message has a second paragraph
-`source-commit: <that HEAD>`.
+What W.3 guarantees about the workspace (m3.md decision 4): it starts as
+`git archive` of the **tree of `repo`'s HEAD at Start** (committed files only,
+no symlinks), and that HEAD is recorded as `WorkflowStarted.source_commit`,
+folded into `State.SourceCommit`.
 
 **Decision: branch from the commit the workflow started from, with the
 workflow's diff applied in a private index.** The branch commit has
@@ -311,8 +311,7 @@ in the table below and creates nothing:
         (a resume after a crash between update-ref and task_finished)
       else → E4.
  6. f := e.newFlow(w, st.WorkflowID)
-    msg := f.git.run(ctx, "log", "-1", "--format=%B", st.BaseCommit); source := the value of its
-    line "source-commit: <hash>" (no such line → E6: the workflow did not start from a repository).
+    source := st.SourceCommit; "" → E6 (the workflow did not start from a repository).
     repoGit(… g…, "cat-file", "-e", source + "^{commit}") fails → E5.
  7. final := lastCommit(events); final == st.BaseCommit → E6.
     patch := f.git.run(ctx, "diff", "--binary", "--full-index", "--no-color", "--no-ext-diff",
@@ -471,10 +470,12 @@ compared after `filepath.EvalSymlinks`); otherwise
 `workflow: input repo: <dir> is not the top level of a git repository`. This
 fails before any model call instead of at the end of the workflow.
 
-**`--id`**: default `w.ID(time.Now())`. A given id must match
-`^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$`, contain neither `..` nor `@{`, and not
-end with `.` or `.lock` (it becomes a directory name and part of a git branch
-name); else `workflow: invalid --id %q`.
+**`--id`**: default `w.ID(time.Now())` (m3.md decision 14:
+`<name>-v<version>-<UTC yyyymmddThhmmssZ>-<6 hex>`, no `@`). A given id must
+match `^[A-Za-z0-9][A-Za-z0-9_-]{0,57}$` (decision 14; 58 so that child run
+ids `<workflow-id>-<n>` stay within the run-id rule; no dots, so `adlc/<id>`
+is always a valid branch name), else `workflow: invalid --id %q`. E3 stays as
+a defensive check in export.
 
 **`--fake-script`** — `parseFakeScripts(values []string) (map[string]string, error)`:
 `AGENT_NAME=PATH`; no `=` or an empty side → `workflow: --fake-script %q: want AGENT_NAME=PATH`;
@@ -572,10 +573,10 @@ summary; exit code below. Every error before `Start` leaves no file behind
 `st, err := eng.ResolveGate(ctx, w, id, taskID, !o.reject, by, o.comment)`; error → exit 1;
 print `gate of task <task> approved by <by>` or `gate of task <task> rejected by <by>`, then the summary; exit code.
 
-**Exit codes** (m3.md): `st.Status == "completed"` and outcome `COMPLETED` → 0;
-`"awaiting_approval"` → 0 (parked; the `next:` line says what to do);
-`"completed"` with any other outcome → `&exitError{code: 2}` (a rejected gate is 2);
-`"running"` (the engine returned without finishing, e.g. interrupted) → exit 1 with
+**Exit codes** (m3.md): `st.Status == workflow.StatusCompleted` and outcome `COMPLETED` → 0;
+`StatusAwaitingApproval` → 0 (parked; the `next:` line says what to do);
+`StatusCompleted` with any other outcome → `&exitError{code: 2}` (a rejected gate is 2);
+`StatusRunning` (the engine returned without finishing, e.g. interrupted) → exit 1 with
 `workflow <id> stopped before it finished; continue it with: adlc workflow resume <id> <file>`.
 Usage and infrastructure errors → 1.
 
@@ -596,7 +597,7 @@ Lines, in this order (omitted lines are noted):
 | `workspace:` | `eng.Workspace(id)` |
 | `branch:` | one line per export task with `Passed`: `adlc/<id> in <st.Inputs["repo"]>` |
 | `next:` | one line per task in `w.Order()` with `GatePending`: `adlc workflow approve <id> <task> <file> [--reject]` |
-| `next:` | one line per task whose `Outcome` is `TASK_OUTCOME_AWAITING_APPROVAL` while status is `awaiting_approval`: `adlc approve <approval id> <LastRunID> AGENT_YAML, then adlc workflow resume <id> <file>` (`<approval id>` = the first of `runs.State(LastRunID).PendingApprovals`; `AGENT_YAML` literally: the task's agent or critic file) |
+| `next:` | one line per task whose `Outcome` is `TASK_OUTCOME_AWAITING_APPROVAL` while status is `awaiting_approval`: `adlc approve <approval id> <run> AGENT_YAML, then adlc workflow resume <id> <file>` (`<run>` = the last element of `RunIDs`, which may be a critic run, not `LastRunID`, which is producers only; `<approval id>` = the first of `runs.State(<run>).PendingApprovals`; `AGENT_YAML` literally: the task's agent or critic file) |
 
 `<file>` is FILE as given on the command line.
 
@@ -612,12 +613,12 @@ Tokens printed = input + output + cache read + cache write. (W.6 reuses this.)
 Example after `run` of the CLI test fixture (parked):
 
 ```
-workflow:  flow@1-20261114T100000Z-0a1b2c
+workflow:  flow-v1-20261114T100000Z-0a1b2c
 status:    awaiting_approval
 tasks:     1/2 passed
 spent:     $0.000000  tokens 140  runs 1
-workspace: <tmp>/workflows/flow@1-20261114T100000Z-0a1b2c/workspace
-next:      adlc workflow approve flow@1-20261114T100000Z-0a1b2c release <tmp>/flow.yaml [--reject]
+workspace: <tmp>/workflows/flow-v1-20261114T100000Z-0a1b2c/workspace
+next:      adlc workflow approve flow-v1-20261114T100000Z-0a1b2c release <tmp>/flow.yaml [--reject]
 ```
 
 The engine's own progress lines (W.3, `Options.Stdout`) come before the summary.
@@ -631,7 +632,7 @@ line written with `"%s\t%s\t%s\t%s\t%s\t%s\n"` (no trailing tab), rows in id ord
 
 ```
 WORKFLOW                        STATUS             OUTCOME  PASSED  STARTED               LAST
-flow@1-20261114T100000Z-0a1b2c  awaiting_approval  -        1       2026-11-14T10:00:00Z  2026-11-14T10:00:05Z
+flow-v1-20261114T100000Z-0a1b2c  awaiting_approval  -        1       2026-11-14T10:00:00Z  2026-11-14T10:00:05Z
 ```
 
 OUTCOME = lower-case name without prefix, `-` while unspecified. PASSED = number of
@@ -653,7 +654,7 @@ last:      <LastEventAt RFC3339 UTC>
 inputs:    <name=value pairs sorted by name, joined with one space>
 
 TASK       ATTEMPTS  ROUNDS  OUTCOME  DONE  GATE     COMMIT        RUNS
-write      1         0       passed   yes   -        1a2b3c4d5e6f  run-…
+write      1         0       passed   yes   -        1a2b3c4d5e6f  <id>-1
 release    0         0       -        no    pending  -             -
 ```
 
@@ -670,9 +671,12 @@ of the table. Same tabwriter settings and `%s\t…\n` format as the list.
 m3.md decision 10: a child run that parks for a tool approval parks the
 workflow; after `adlc approve` finishes that run, `adlc workflow resume` picks
 it up. W.3 already does its half: the parked run's sandbox is **kept**
-(labelled `adlc.run_id` = the child run id, `task_finished{AWAITING_APPROVAL, detail "sandbox <id>"}`),
-and `Resume` collects the run once it has finished (`execContinue`) and
-destroys the sandbox. Today's `adlc approve` cannot continue such a run: it
+(labelled `adlc.run_id` = the child run id; its id is in
+`task_finished{AWAITING_APPROVAL}.sandbox_id`, folded into `TaskState.SandboxID`),
+and `adlc workflow resume`, once the run has finished, writes a new
+`task_started` with the **same run id** (a continuation, not a second
+`task_finished` for the parked record), copies that sandbox out, commits and
+destroys it. Today's `adlc approve` cannot continue such a run: it
 builds the tools from the agent file (`buildRun`), but a workflow child's
 tools are the in-process sandbox tool router on that kept sandbox, which the
 agent file does not name. This task adds that path.
@@ -704,7 +708,9 @@ func continueWorkflowRun(ctx context.Context, o approveOptions, a *agentconfig.A
 
 1. Refuse `a.Tools` / `a.Sandbox` with W.5's two `loadAgent` errors (workflow agents never have them).
 2. `b, err := open(ctx)`; `defer b.Close()`; `h, err := findLiveSandbox(ctx, b, st.RunID)` (resume.go;
-   `b` satisfies `sandboxLookup`). Its "not running" message is the right one here too.
+   `b` satisfies `sandboxLookup`): it finds the container by the `adlc.run_id` label, which
+   needs no workflow log. Its "not running" message is the right one here too. (The workflow
+   log's `sandbox_id` names the same container; `adlc approve` does not open the workflow log.)
 3. `tools := sandboxset.NewRouter(ctx, sandboxtool.Options{Sandbox: b, Handle: h})`; `defer tools.Close()`.
 4. `hooks, closeHooks := startHooks(ctx, a, o.startHook)`; models from `buildModel(a, o.fakeScript)`, `buildPlanModel`.
 5. `cfg := harnessConfig(a, st.RunID, "")`; `cfg.Budget = st.Budget` (the nested budget the run was started
@@ -726,8 +732,8 @@ The exit code rule is unchanged (0 completed, 2 otherwise).
 	TaskID     string // task W.5: RunStarted.task_id
 ```
 
-In the M3 section (`## §12 M3 additions (briefs W.1–W.6)`, created by W.1–W.3;
-if it does not exist, add it with that heading after §11), add:
+At the end of §12 "M3 additions" (W.1 creates it; W.2–W.6 each append a
+subsection — append yours after whatever is there, do not reorder), add:
 
 ```
 ### Gates and export (W.5)
@@ -743,7 +749,7 @@ and this paragraph: "A gated task parks the workflow before it starts
 `gate_resolved{approved, by "auto"}`. A rejection ends the workflow
 `REJECTED`. An export task applies the diff between the workflow's base and
 its last commit to the source commit of input `repo` (the HEAD the workflow
-started from, `source-commit:` in the base commit) in a private index and
+started from, `State.SourceCommit`) in a private index and
 creates `refs/heads/adlc/<workflow id>` with parent = that commit, via
 `update-ref` (refused if it exists); hooks and fsmonitor are off, nothing is
 pushed, the working tree, index, HEAD and current branch are not touched.
@@ -754,7 +760,7 @@ switch, hooks, the nested budget and `Config.WorkflowID`/`TaskID`."
 
 ## Steps
 
-1. Branch from the latest `main` (AGENTS.md). Read W.3's `engine.go`: find the hook block and the helpers listed under "Where the two hooks go", and check that a parked child run keeps its sandbox (`task_finished{AWAITING_APPROVAL, "sandbox <id>"}`) and that the base commit has the `source-commit:` line. If any of this is missing or different, stop and report.
+1. Branch from the latest `main` (AGENTS.md). Read W.3's `engine.go`: find the hook block and the helpers listed under "Where the two hooks go", and check that a parked child run keeps its sandbox (`task_finished{AWAITING_APPROVAL, sandbox_id}`) and that `Resume` continues it with a new `task_started` with the same run id and that `workflow_started.source_commit` is set from the repo's HEAD. If any of this is missing or different, stop and report.
 2. Harness: `Config.WorkflowID`, `Config.TaskID`, the `run_started` change; `workflow_ids_test.go`. `go test ./internal/harness/` passes.
 3. `gate.go`: `GatePolicy` and its constants, `ErrNoPendingGate`, `checkGate`, `gateSummary`, `ResolveGate`; `Options.Gates`; delete the `checkGate` stub from `engine.go`.
 4. `gate_test.go`; see each test fail once by breaking the code (for example skip step 2 of `checkGate`).
@@ -772,7 +778,7 @@ switch, hooks, the nested budget and `Config.WorkflowID`/`TaskID`."
 
 | Test | Asserts |
 |------|---------|
-| `TestRunRecordsWorkflowAndTask` | `Run` with `cfg.WorkflowID = "wf@1-x"`, `cfg.TaskID = "spec"` and the fake `[textTurn("done")]` → the first event's `run_started` has `workflow_id == "wf@1-x"`, `task_id == "spec"`; the folded state has `WorkflowID`/`TaskID` set |
+| `TestRunRecordsWorkflowAndTask` | `Run` with `cfg.WorkflowID = "wf-v1-x"`, `cfg.TaskID = "spec"` and the fake `[textTurn("done")]` → the first event's `run_started` has `workflow_id == "wf-v1-x"`, `task_id == "spec"`; the folded state has `WorkflowID`/`TaskID` set |
 | `TestRunWithoutWorkflowLeavesIDsEmpty` | default config → both fields `""` |
 
 ### `internal/workflow/gate_test.go` and `export_test.go`
@@ -803,7 +809,7 @@ tasks:
 
 - `fakeRunner` steps for `write`: `fakeStep{sh: "printf 'hi\n' > out.txt", result: "done", usd: 1000, tokens: 150}`
   (W.3's fake puts `tokens` into input tokens: 150 tokens, $0.001000).
-- `flowID = "flow@1-20261114T100000Z-0a1b2c"`; `te.eng.Start(ctx, w, flowID, map[string]string{"repo": repo})`.
+- `flowID = "flow-v1-20261114T100000Z-0a1b2c"`; `te.eng.Start(ctx, w, flowID, map[string]string{"repo": repo})`.
 
 | Test | Asserts |
 |------|---------|
@@ -815,7 +821,7 @@ tasks:
 | `TestResolveGateRejectEndsRejected` | `approved=false, by "bob", comment "no"` → exactly `gate_resolved`, `workflow_completed{REJECTED, "gate of task release rejected by bob: no"}` appended; no `task_started` for `release`; no branch |
 | `TestResolveGateRejectWithoutComment` | detail `gate of task release rejected by bob` |
 | `TestResolveGateNoPendingGate` | task `write` → `ErrNoPendingGate`; task `nope` → `ErrNoPendingGate`; approve twice → the second is `ErrWorkflowFinished` (the workflow completed); log length unchanged by the refused calls |
-| `TestResolveGateUnknownWorkflow` | id `flow@1-none` → `errors.Is(err, ErrWorkflowNotFound)` |
+| `TestResolveGateUnknownWorkflow` | id `flow-v1-none` → `errors.Is(err, ErrWorkflowNotFound)` |
 | `TestResolveGateWorkflowChanged` | `w.Digest = "sha256:other"` → `ErrWorkflowChanged`; nothing appended |
 | `TestResolveGateNeedsBy` | `by == ""` → error contains `resolved by is empty`; nothing appended |
 | `TestGateAutoApprove` | `GateAutoApprove`: one `Start` completes the workflow; kinds contain `gate_requested` immediately followed by `gate_resolved{approved, "auto", ""}`; branch exists |
@@ -898,7 +904,7 @@ temp dir, `inputs: ["repo=<repo>"]`, `fakeScripts: ["writer=<tmp>/writer.fake.js
 | Test | Asserts |
 |------|---------|
 | `TestWorkflowRunParksAtGate` | `workflowRun` → code 0; stdout ends with exactly the six summary lines of the example (with the temp paths); no branch `adlc/<id>` |
-| `TestWorkflowChildRunRecordsWorkflowAndTask` | after run: the only run in `--db` has `WorkflowID == flowID`, `TaskID == "write"`; its `run_started.budget` equals `writer.yaml`'s budget (no workflow budget, so nesting keeps it) |
+| `TestWorkflowChildRunRecordsWorkflowAndTask` | after run: the only run in `--db` has id `flowID + "-1"` (decision 14), `WorkflowID == flowID`, `TaskID == "write"`; its `run_started.budget` equals `writer.yaml`'s budget (no workflow budget, so nesting keeps it) |
 | `TestWorkflowChildBudgetIsNested` | `flow.yaml` with `budget: {max_wall_clock: 1m}` → the child's `run_started.budget.max_wall_clock` is 1m (not the agent's 2m) |
 | `TestWorkflowApproveExportsBranch` | run, then `workflowApprove(…, flowID, "release", file)` with `by: "bob"` → code 0; stdout starts with `gate of task release approved by bob`; contains `status:    completed`, `outcome:   completed`, `tasks:     2/2 passed`, `branch:    adlc/<id> in <repo>`; `git -C <repo> show adlc/<id>:out.txt` = `hi\n` |
 | `TestWorkflowApproveReject` | `reject: true, comment: "no", by: "bob"` → code 2; `outcome:   rejected`, `detail:    gate of task release rejected by bob: no`; no branch |
@@ -907,21 +913,21 @@ temp dir, `inputs: ["repo=<repo>"]`, `fakeScripts: ["writer=<tmp>/writer.fake.js
 | `TestWorkflowResumeFinished` | after approve → resume code 1, error contains `already completed` |
 | `TestWorkflowResumeMissingLog` | `--workflow-db` that does not exist → code 1, `workflow log <path> does not exist` |
 | `TestWorkflowRunInputErrors` | table, each code 1 with the exact message of the inputs table, and `--workflow-db` not created: `repo` (no `=`); `=x`; `repo=a` twice; `nope=x`; no `--input`; `repo=<a file>`; `repo=<a subdirectory of a git repo>` → `is not the top level of a git repository` |
-| `TestWorkflowRunInvalidID` | `--id a/b`, `--id x..y`, `--id x.lock` → code 1, `invalid --id` |
+| `TestWorkflowRunInvalidID` | `--id a/b`, `--id a@1`, `--id x..y`, `--id x.lock`, `--id -x`, `--id` of 59 characters → code 1, `invalid --id`; 58 characters → accepted |
 | `TestWorkflowRunExistingID` | run twice with the same `--id` → second code 1, `already exists` |
 | `TestWorkflowNeedsFakeScript` | no `--fake-script` → code 1, `workflow: task write: agent writer.yaml uses provider fake; give --fake-script writer=PATH` (the ref printed as written in the file); `--db` has no run |
 | `TestWorkflowAgentWithToolsRefused` | `writer.yaml` with a `tools:` entry → code 1, `declares tools` |
 | `TestWorkflowKillSwitchStopsChild` | control db with `Kill(ScopeAgent, "writer", "stop")` → the child run ends `CANCELLED` with detail `killed: stop`; workflow outcome `FAILED`; code 2 |
 | `TestWorkflowRegistryRef` | register `writer.yaml` in the control db (`controlplane.Register`); `flow.yaml` with `agent: writer@1` → code 0 (parked), the child's `AgentID` is `writer@1` |
 | `TestWorkflowStatusList` | after a parked run: `workflowStatus(ctx, wdb, "")` → two lines; `strings.Fields` of the first is `[WORKFLOW STATUS OUTCOME PASSED STARTED LAST]`, of the second `[<id> awaiting_approval - 1 <started> <last>]`; no line ends with a space |
-| `TestWorkflowStatusDetail` | contains `status:    awaiting_approval`, `inputs:    repo=<repo>`, a `write` row with fields `[write 1 0 passed yes - <12 hex> <run id>]` and a `release` row `[release 0 0 - no pending - -]` |
+| `TestWorkflowStatusDetail` | contains `status:    awaiting_approval`, `inputs:    repo=<repo>`, a `write` row with fields `[write 1 0 passed yes - <12 hex> <flowID>-1]` and a `release` row `[release 0 0 - no pending - -]` |
 | `TestWorkflowStatusEmpty` | empty workflow log (open and close it) → exactly `no workflows\n` |
 | `TestWorkflowStatusUnknown` | code 1, `workflow not found` |
 | `TestWorkflowStatusMissingDB` | code 1, `workflow log <path> does not exist` |
 | `TestParseInputs` | table for every row of the inputs table plus a valid case (dir and file made absolute, text kept) |
 | `TestParseFakeScripts` | `a=p` ok; `a`, `=p`, `a=` rejected; `a=p a=q` rejected |
 | `TestWorkflowAgentPath` | `Dir "/wf"`: `writer.yaml` → `/wf/writer.yaml`; `/x/a.yaml` → `/x/a.yaml`; `coder@1`, `coder@prod` → unchanged |
-| `TestApproveContinuesWorkflowChildRun` (`workflow_test.go`) | `flow.yaml` with `writer.yaml`'s `write` rule set to `decision: needs_approval`; one `recordingHost` (a `sandboxtest.Host` that remembers `Spec.RunID` → handle and implements `FindByRunID` and `Close`) serves both `workflowRun` and `approveOptions.openTaskSandbox`. `workflowRun` → code 0, status `awaiting_approval`, a `next:` line `adlc approve a-call_1 <child run id> AGENT_YAML, then adlc workflow resume …`; `approveRun(ctx, o, "a-call_1", <child>, …)` with a fake script holding only the turn `Wrote out.txt.` → code 0, `stop:    completed`, the extra `workflow:` line; the child's last events are `tool_call_completed`, `checkpoint`, …, `run_completed{COMPLETED}`; then `workflowResume` → the task passes (commit has `out.txt`), the workflow parks at the `release` gate; the recorded sandbox was destroyed |
+| `TestApproveContinuesWorkflowChildRun` (`workflow_test.go`) | `flow.yaml` with `writer.yaml`'s `write` rule set to `decision: needs_approval`; one `recordingHost` (a `sandboxtest.Host` that remembers `Spec.RunID` → handle and implements `FindByRunID` and `Close`) serves both `workflowRun` and `approveOptions.openTaskSandbox`. `workflowRun` → code 0, status `awaiting_approval`, a `next:` line `adlc approve a-call_1 <child run id> AGENT_YAML, then adlc workflow resume …`; `approveRun(ctx, o, "a-call_1", <child>, …)` with a fake script holding only the turn `Wrote out.txt.` → code 0, `stop:    completed`, the extra `workflow:` line; the child's last events are `tool_call_completed`, `checkpoint`, …, `run_completed{COMPLETED}`; then `workflowResume` → the workflow log gets a new `task_started` for `write` with the **same** run id (`<workflow id>-1`) and then `task_finished{PASSED}` whose commit has `out.txt`; no second record for the parked run; the workflow parks at the `release` gate; the recorded sandbox was destroyed |
 | `TestApproveWorkflowChildSandboxGone` | as above, but destroy the kept sandbox before `approveRun` → code 1, stderr contains `is not running`; nothing appended to the child run |
 | `TestApproveWorkflowChildUsesRunBudget` | as `TestApproveContinuesWorkflowChildRun`, with `flow.yaml` `budget: {max_tokens: 100}` (the child's nested `max_tokens` is 100; `writer.yaml` has none); the approve script is two turns: a `files__list_dir` call with usage 20/20, then `Done.` → the continued run stops `budget_exhausted` before the second model call (70 + 40 tokens ≥ 100); exit code 2. With the agent's own budget it would have completed |
 
@@ -970,7 +976,7 @@ git -C "$repo" status --porcelain              # empty
 - Every git call on the person's repository goes through `repoGit` (hooks and fsmonitor off). `update-ref` runs the `reference-transaction` hook if hooks are on.
 - Never use the repository's own index: `GIT_INDEX_FILE` must point at the private `export.index` for `read-tree`, `apply --cached` and `write-tree`, and must not be set for any other call.
 - The empty last argument of `update-ref` is what makes git refuse an existing branch. Do not drop it, and do not check-then-create without it.
-- Export the diff `base..lastCommit(events)` onto the **source commit** (from the base commit's `source-commit:` line), never onto the repo's current HEAD and never the final tree as a whole.
+- Export the diff `base..lastCommit(events)` onto the **source commit** (`State.SourceCommit`), never onto the repo's current HEAD and never the final tree as a whole.
 - Pass the patch to `git apply` exactly as `git diff` printed it: do not trim it (a helper that trims stdout drops the final newline and the last hunk no longer applies). If W.3's git helper trims, add an untrimmed variant.
 - `checkGate` writes `gate_requested` only when none is pending: a resumed parked workflow must not get a second one.
 - `parent_seq` of `gate_resolved` is the seq of that task's `gate_requested`.
@@ -989,6 +995,6 @@ git -C "$repo" status --porcelain              # empty
 - [ ] `adlc workflow run|resume|approve|status` registered, with the exact output and exit codes, and tests
 - [ ] Child runs get sandbox tools, hooks, the kill switch, `NAME@N` refs, the nested budget and the workflow/task ids (tests)
 - [ ] `adlc approve` continues a workflow child run on its kept sandbox; `adlc workflow resume` then collects it (test)
-- [ ] `interfaces.md` §6 and the M3 section updated
+- [ ] `interfaces.md` §6 updated and the W.5 subsection appended to §12
 - [ ] No change to `events.proto`, `internal/eventlog`, W.2's fold or W.4's `review.go`
 - [ ] `make ci` passes

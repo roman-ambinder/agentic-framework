@@ -87,7 +87,7 @@ internal/cli/workflow.go            eachAgent helper (checkAgents uses it; no be
 internal/cli/cli_test.go            eval in the shared --control-db and --workflow-db tests
 .github/workflows/eval-live.yml     input "workflow"
 docs/impl/live-eval.md              how to run the pipeline live
-docs/impl/interfaces.md             §9 and the M3 section (shared file)
+docs/impl/interfaces.md             §9 line; a subsection appended to §12 (shared file)
 docs/design/2026-11-13-adlc-framework-design.md   §4 table: Spec and Release rows (reality differs)
 README.md                           "Run the SDLC workflow" section
 ```
@@ -307,6 +307,14 @@ tasks:
 `name: sdlc-openai`, and the three agent paths `spec.openai.yaml`,
 `coder.openai.yaml`, `reviewer.openai.yaml`.
 
+**This is the real file; m3.md's workflow example is illustrative.** Where
+they overlap they agree (inputs, task ids, agents, checks, `attempts: 2` and
+`budget: {max_usd: 1.50}` on `implement`, `max_rounds: 2`, the gated export,
+workflow `max_usd: 3.00`, `{{ input "issue" }}` → spec, `{{ result "spec" }}` →
+implement, `max_tokens: 6000000`, which stays above the coder's own
+3,000,000-token budget). It differs on purpose in: `attempts: 2` on `spec`, and fuller prompt texts
+(the implement prompt also gets the issue).
+
 Why these numbers: one coder run may cost up to $2.00 (its own budget); the
 task narrows it to $1.50 so that spec, review and a retry fit in the
 workflow's $3.00. The workflow budget is what `--dry-run` multiplies (below).
@@ -517,7 +525,7 @@ All existing runner tests pass unchanged.
 
 **`RunPipeline` algorithm**, per bug and attempt (`attempt` 1..`max(1, r.Repeat)`), checking `ctx.Err()` before each:
 
-1. `start := r.now()`; `id := p.NewID(start)` (no `-a<n>` suffix: the workflow id is already unique).
+1. `start := r.now()`; `id := p.NewID(start)` (no `-a<n>` suffix: the workflow id, `<name>-v<version>-<time>-<6 hex>` per m3.md decision 14, is already unique; with the 6-character `-grade` suffix the grading sandbox's run id stays within 64 characters).
 2. `res = Result{BugID, Difficulty, Agent: p.Agent, Provider: WorkflowProvider, AgentDigest: p.Digest, RunID: id, Attempt: attempt}`;
    the same deferred `DurationMS` and progress line as `runAttempt`.
 3. `base := filepath.Join(r.WorkDir, id)`; `before`, `after` = `base/before`, `base/after`.
@@ -612,7 +620,7 @@ guard parses the text after `worst_case_usd=`, so it works unchanged.
    `ks := openKillSwitch(ctx, o.controlDB)`, `docker.New` (same "Docker is not available" line), `evalWorkDir(o)`.
 4. `ww.runs = store; ww.killSwitch = ks`.
 5. `eng := workflow.New(workflow.Options{Log: wlog, Runs: store, Sandbox: backend, Image: o.image,
-   BaseDir: filepath.Join(workDir, "workflows"), RunTask: ww.runTask, AgentBudget: ww.agentBudget,
+   BaseDir: filepath.Join(workDir, "workflows") (m3.md "Pipeline evals": the eval work directory, so `--keep-workspaces` applies), RunTask: ww.runTask, AgentBudget: ww.agentBudget,
    Now: time.Now, Stdout: stdout, Gates: workflow.GateAutoApprove, SkipExport: true})`.
 6. `r := &evals.Runner{Suite: suite, Sandbox: backend, Log: store, Image: o.image, WorkDir: workDir, Stdout: stdout,
    Repeat: o.repeat, RunWorkflow: evalRunWorkflow(eng, w, store)}`.
@@ -747,7 +755,8 @@ With real models: `workflows/sdlc.yaml` (set `ADLC_ANTHROPIC_MODEL` and the
 
 `interfaces.md` §9, after the Q.2 line:
 `// task W.6: WorkflowProvider, WorkflowRun, WorkflowResult, Pipeline, Runner.RunWorkflow, Runner.RunPipeline`;
-in the M3 section, a `### Pipeline evals (W.6)` subsection with the Go block
+at the end of §12 "M3 additions" (W.1 creates it; append after the other
+subsections, do not reorder), a `### Pipeline evals (W.6)` subsection with the Go block
 of "Pipeline evals in `internal/evals`" above and the line
 "`Options.SkipExport`: an export task writes `task_started` and
 `task_finished{PASSED, "export skipped"}` and runs no git command."
@@ -771,16 +780,16 @@ Use `newRunnerEnv(t, nil)` (`runner_test.go`) and set `r.RunWorkflow`.
 `fixingWorkflow(t)` returns a `RunWorkflow` that copies `wr.RepoDir` without
 `.git` into `t.TempDir()/ws`, runs `fixCmd` there (`sh -c`, `cmd.Dir = ws`), and returns
 `WorkflowResult{Outcome: "WORKFLOW_OUTCOME_COMPLETED", Workspace: ws, State: &eventlog.RunState{Step: 7, ToolCalls: 9, Usage: eventlog.Usage{USDMicros: 5000}}}`.
-`counterID()` returns a `NewID` giving `flow@1-1`, `flow@1-2`, …; `pipe = Pipeline{Agent: "flow@1", Digest: "sha256:abc", NewID: counterID()}`.
+`counterID()` returns a `NewID` giving `flow-v1-1`, `flow-v1-2`, …; `pipe = Pipeline{Agent: "flow@1", Digest: "sha256:abc", NewID: counterID()}`.
 
 | Test | Asserts |
 |------|---------|
-| `TestRunPipelineGradesFinalWorkspace` | one result: `Provider "workflow"`, `Agent "flow@1"`, `AgentDigest "sha256:abc"`, `RunID "flow@1-1"`, `Attempt 1`, `StopReason "WORKFLOW_OUTCOME_COMPLETED"`, `Solved()`, `ChangedFiles` = the fix file, `Grade.Steps 7`, `Grade.ToolCalls 9`, `Grade.USDMicros 5000` |
+| `TestRunPipelineGradesFinalWorkspace` | one result: `Provider "workflow"`, `Agent "flow@1"`, `AgentDigest "sha256:abc"`, `RunID "flow-v1-1"`, `Attempt 1`, `StopReason "WORKFLOW_OUTCOME_COMPLETED"`, `Solved()`, `ChangedFiles` = the fix file, `Grade.Steps 7`, `Grade.ToolCalls 9`, `Grade.USDMicros 5000` |
 | `TestRunPipelinePassesInputs` | the recorded `WorkflowRun`: `RepoDir` has a `.git` and `git log` shows one commit `base`; `os.ReadFile(IssuePath)` equals `bug.Issue`; `ID == RunID` of the result |
 | `TestRunPipelineHiddenTestNotInRepo` | inside `RunWorkflow`, `HiddenTestPath(bug)` does not exist under `RepoDir` |
 | `TestRunPipelineUnchangedIsUnsolved` | a `RunWorkflow` that copies without fixing → not solved, `FilesChanged 0`, no `Error` |
 | `TestRunPipelineWorkflowError` | `RunWorkflow` returns `errors.New("boom")` → `Error == "run workflow: boom"`, `Grade == nil` |
-| `TestRunPipelineRepeat` | `Repeat = 2` → two results, `Attempt` 1 and 2, `RunID` `flow@1-1` and `flow@1-2` |
+| `TestRunPipelineRepeat` | `Repeat = 2` → two results, `Attempt` 1 and 2, `RunID` `flow-v1-1` and `flow-v1-2` |
 | `TestRunPipelineNeedsRunWorkflow` | `RunWorkflow` nil → error, no result |
 | `TestRunPipelineCancelled` | cancelled ctx → `ctx.Err()` returned, no result |
 | `TestAnalyzeFailuresWorkflowResults` | an `EventReader` whose `Read` calls `t.Fatal`; three unsolved workflow results: `WORKFLOW_OUTCOME_BUDGET_EXHAUSTED` → `budget`, `workflow budget exhausted`; `WORKFLOW_OUTCOME_UNSPECIFIED` → `refused-or-error`; `WORKFLOW_OUTCOME_REVIEW_EXHAUSTED` with `Grade{FilesChanged: 1}` → `no-repro`, evidence starts with `review_exhausted; ` |
@@ -847,7 +856,7 @@ make ci                                                                       # 
 
 The README demo, by hand with Docker: the first command ends with
 `status:    awaiting_approval`; after `approve`, `git log` shows the branch commit
-`adlc: workflow sdlc-demo@1-…`.
+`adlc: workflow sdlc-demo-v1-…` (workflow ids have no `@`, m3.md decision 14).
 
 ## Out of scope
 
@@ -870,7 +879,7 @@ The README demo, by hand with Docker: the first command ends with
 - `RunPipeline` writes the hidden test only into `after`, after the workflow ended. Never pass a workspace prepared `WithHiddenTest` as `repo`.
 - Pipeline results' `RunID` is a workflow id: never pass it to code that reads the run log (that is why `classifyWorkflow` exists).
 - `--agents` lost `MarkFlagRequired`; the either/or check must run before anything is loaded.
-- The engine's `BaseDir` for evals is inside the eval workdir, so `--keep-workspaces` keeps the workflow workspaces too.
+- The engine's `BaseDir` for evals is `<eval workdir>/workflows` (m3.md "Pipeline evals"), not `.adlc/workflows`: workflow workspaces are removed with the eval workdir unless `--keep-workspaces` is given. The workflow log (`--workflow-db`) is kept either way, so `adlc workflow status` still lists the runs.
 
 ## Done checklist
 
