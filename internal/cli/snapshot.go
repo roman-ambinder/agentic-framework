@@ -142,7 +142,7 @@ func (s *runSandbox) suspend(ctx context.Context, o runOptions, store *eventlog.
 func (s *runSandbox) restoreUnrecorded(ctx context.Context, snap sandbox.Snapshot, recordErr error, stdout io.Writer) error {
 	h, err := s.backend.Restore(ctx, s.spec, snap)
 	if err != nil {
-		return fmt.Errorf("run: sandbox saved to %s but not recorded (%v) and not restored: %w; recover the files with: tar -xf %s",
+		return fmt.Errorf("run: sandbox saved to %s but not recorded (%w) and not restored: %w; recover the files with: tar -xf %s",
 			snap.TarPath, recordErr, err, snap.TarPath)
 	}
 	s.handle = h
