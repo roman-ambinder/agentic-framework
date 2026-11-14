@@ -44,6 +44,13 @@ type Agent struct {
 	Sources []SourceFile `yaml:"-"`
 }
 
+// Values of Sandbox.Pause.
+const (
+	PauseAuto  = "auto"  // default: suspend the sandbox when the run pauses
+	PauseFiles = "files" // suspend the sandbox and save /workspace (same as auto until P.4)
+	PauseKeep  = "keep"  // leave the sandbox running while the run is paused
+)
+
 // Sandbox describes the container `adlc run` creates for the agent.
 type Sandbox struct {
 	Image     string  `yaml:"image"`     // default DefaultSandboxImage
@@ -51,6 +58,13 @@ type Sandbox struct {
 	Network   bool    `yaml:"network"`
 	CPUs      float64 `yaml:"cpus"`      // 0 = no limit
 	MemoryMB  int64   `yaml:"memory_mb"` // 0 = no limit
+	Pause     string  `yaml:"pause"`     // auto (default), files or keep; see PauseAuto
+}
+
+// Suspends reports whether a run paused for approval should free this sandbox
+// container (saving /workspace first) instead of keeping it running.
+func (s *Sandbox) Suspends() bool {
+	return s.Pause != PauseKeep
 }
 
 // Model selects and configures the model.
@@ -214,6 +228,9 @@ func (a *Agent) applyDefaults() {
 	}
 	if a.Sandbox != nil && a.Sandbox.Image == "" {
 		a.Sandbox.Image = DefaultSandboxImage
+	}
+	if a.Sandbox != nil && a.Sandbox.Pause == "" {
+		a.Sandbox.Pause = PauseAuto
 	}
 	if a.Model.Provider == "fake" && a.Model.Name == "" {
 		a.Model.Name = DefaultFakeModel

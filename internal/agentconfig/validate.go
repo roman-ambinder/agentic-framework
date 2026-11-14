@@ -328,4 +328,9 @@ func validateSandboxFields(p *problems, workspace string, sb Sandbox) {
 	if sb.MemoryMB < 0 {
 		p.add("sandbox.memory_mb", "must be >= 0, got %d", sb.MemoryMB)
 	}
+	switch sb.Pause {
+	case "", PauseAuto, PauseFiles, PauseKeep:
+	default:
+		p.add("sandbox.pause", "must be auto, files or keep, got %q", sb.Pause)
+	}
 }

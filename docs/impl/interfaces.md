@@ -785,6 +785,8 @@ Task 1.6.1 adds the optional `context:` section (`max_input_tokens`,
 `keep_recent_steps`, both >= 0) and `(*Agent).ContextBudget() contextmgr.Budget`,
 which the CLI wiring assigns to `harness.Config.Context`.
 
+Task P.5a adds `sandbox.pause` (`auto` default, `files`, `keep`; constants `PauseAuto`, `PauseFiles`, `PauseKeep`) and `(*Sandbox).Suspends() bool` (true unless `keep`).
+
 Task Q.4 adds the optional `planning:` section (enabled, prompt, max_tokens 0..1000000); harnessConfig maps it to harness.Config.Plan.
 
 Task C.2 adds `policy.include` (policy files, `PolicyFile{include, rules}`, paths relative to the naming file, no
