@@ -1,6 +1,6 @@
 # Sandbox pause and restore — design
 
-Status: draft for review. Nothing here is built yet.
+Status: files path built (P.1–P.3, P.5a–P.5b); process checkpoints (P.4) deferred, see §8.
 Code references are to the `integration` branch as of 2026-11-14.
 
 ## 1. Intent
@@ -135,6 +135,8 @@ type RestoreResult struct {
     FallbackCause string // why the process checkpoint was not used, if it existed
 }
 ```
+
+Built interface: see docs/impl/interfaces.md §8 (SuspendOptions, CheckpointID and RestoreResult are left out until P.4).
 
 ### 5.2 Docker backend
 

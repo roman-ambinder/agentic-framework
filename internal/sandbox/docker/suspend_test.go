@@ -1,9 +1,14 @@
 package docker
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/roman-ambinder/agentic-framework/internal/sandbox"
 )
 
 func TestFileSHA256(t *testing.T) {
@@ -30,6 +35,39 @@ func TestFileSHA256(t *testing.T) {
 			}
 			if got != tt.want || n != tt.size {
 				t.Fatalf("got (%q, %d), want (%q, %d)", got, n, tt.want, tt.size)
+			}
+		})
+	}
+}
+
+func TestDestroyAfterCopyKeepsTar(t *testing.T) {
+	errBusy := errors.New("daemon busy")
+	tests := []struct {
+		name    string
+		destroy error
+		wantErr error
+	}{
+		{"destroyed", nil, nil},
+		{"container already gone", fmt.Errorf("docker: destroy x: %w", sandbox.ErrNotFound), nil},
+		{"destroy fails", fmt.Errorf("docker: destroy x: %w", errBusy), errBusy},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tarPath := filepath.Join(t.TempDir(), "w.tar")
+			if err := os.WriteFile(tarPath, []byte("tar"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			want := sandbox.Snapshot{TarPath: tarPath, SHA256: "sha256:x"}
+			destroy := func(context.Context, sandbox.Handle) error { return tt.destroy }
+			got, err := destroyAfterCopy(context.Background(), destroy, sandbox.Handle{ID: "x"}, want)
+			if !errors.Is(err, tt.wantErr) || (tt.wantErr == nil) != (err == nil) {
+				t.Fatalf("err = %v, want %v", err, tt.wantErr)
+			}
+			if err == nil && got != want {
+				t.Fatalf("snapshot = %+v, want %+v", got, want)
+			}
+			if _, err := os.Stat(tarPath); err != nil {
+				t.Fatalf("tar removed: %v", err)
 			}
 		})
 	}

@@ -149,7 +149,7 @@ func (s *RunState) apply(ev *adlcv1.Event) error {
 	case StatusFinished:
 		return fmt.Errorf("run already finished (%s)", s.StopReason)
 	case StatusPaused:
-		sandbox := ev.GetSandboxSuspended() != nil || ev.GetSandboxRestored() != nil
+		sandbox := isSandboxEvent(ev)
 		if ev.GetApprovalResolved() == nil && !sandbox {
 			return errors.New("paused run can only continue with approval_resolved or a sandbox event")
 		}
@@ -159,8 +159,12 @@ func (s *RunState) apply(ev *adlcv1.Event) error {
 	}
 
 	s.LastSeq = ev.GetSeq()
-	s.LastEventAt = ev.GetTime().AsTime()
-	s.Usage.add(ev.GetCost())
+	if !isSandboxEvent(ev) {
+		// A sandbox event is written around the human wait of a paused run;
+		// its time must not count against the wall-clock budget.
+		s.LastEventAt = ev.GetTime().AsTime()
+		s.Usage.add(ev.GetCost())
+	}
 
 	switch p := ev.GetPayload().(type) {
 	case *adlcv1.Event_RunStarted:
@@ -270,9 +274,9 @@ func (s *RunState) apply(ev *adlcv1.Event) error {
 		// above already allow it only while the run is running.
 
 	case *adlcv1.Event_SandboxSuspended, *adlcv1.Event_SandboxRestored:
-		// Changes nothing: a new field would change every digest. A paused run
-		// stays paused; the checks above allow these only while the run is
-		// paused or running.
+		// Changes nothing but LastSeq: a new field would change every digest.
+		// A paused run stays paused; the checks above allow these only while
+		// the run is paused or running.
 
 	case nil:
 		s.UnknownEvents++
@@ -310,4 +314,9 @@ func (s *RunState) Digest() (string, error) {
 	}
 	sum := sha256.Sum256(b)
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+// isSandboxEvent reports whether ev is sandbox_suspended or sandbox_restored.
+func isSandboxEvent(ev *adlcv1.Event) bool {
+	return ev.GetSandboxSuspended() != nil || ev.GetSandboxRestored() != nil
 }

@@ -155,7 +155,7 @@ func restoreSandbox(ctx context.Context, b runBackend, store *eventlog.Store, ru
 		_ = b.Destroy(context.WithoutCancel(ctx), h)
 		return sandbox.Handle{}, fmt.Errorf("resume: %w", err)
 	}
-	fmt.Fprintf(stdout, "sandbox: restored %s (files only)\n", shortSandboxID(h.ID))
+	fmt.Fprintf(stdout, "sandbox: restored %s (files only: /workspace kept; running processes and files outside /workspace were not kept)\n", shortSandboxID(h.ID))
 	return h, nil
 }
 

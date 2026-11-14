@@ -20,8 +20,11 @@ import (
 var _ sandbox.Suspender = (*Backend)(nil)
 
 // Suspend writes the /workspace archive of h to tarPath, destroys the
-// container and returns the snapshot. On any error before the container is
-// destroyed it is left untouched and no file remains at tarPath.
+// container and returns the snapshot. On any error before the destroy the
+// container is left untouched and no file remains at tarPath. Once the
+// archive is complete it is never removed: a container that is already gone
+// counts as destroyed, and any other destroy error is returned with the tar
+// kept at tarPath, since it may be the only copy of /workspace.
 func (b *Backend) Suspend(ctx context.Context, h sandbox.Handle, tarPath string) (sandbox.Snapshot, error) {
 	data, err := b.CopyOut(ctx, h, sandbox.WorkspacePath)
 	if err != nil {
@@ -35,9 +38,16 @@ func (b *Backend) Suspend(ctx context.Context, h sandbox.Handle, tarPath string)
 		_ = os.Remove(tarPath)
 		return sandbox.Snapshot{}, err
 	}
-	if err := b.Destroy(ctx, h); err != nil {
-		_ = os.Remove(tarPath)
-		return sandbox.Snapshot{}, err
+	return destroyAfterCopy(ctx, b.Destroy, h, snap)
+}
+
+// destroyAfterCopy destroys h once snap holds its /workspace. ErrNotFound
+// counts as success; on any other error snap.TarPath is kept.
+func destroyAfterCopy(ctx context.Context, destroy func(context.Context, sandbox.Handle) error,
+	h sandbox.Handle, snap sandbox.Snapshot,
+) (sandbox.Snapshot, error) {
+	if err := destroy(ctx, h); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
+		return sandbox.Snapshot{}, fmt.Errorf("docker: suspend: workspace saved to %s: %w", snap.TarPath, err)
 	}
 	return snap, nil
 }

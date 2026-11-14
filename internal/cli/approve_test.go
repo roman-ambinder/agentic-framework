@@ -213,6 +213,11 @@ func TestOneLine(t *testing.T) {
 	}
 }
 
+// restoredLine is the stdout line for a sandbox restored as id.
+func restoredLine(id string) string {
+	return "sandbox: restored " + id + " (files only: /workspace kept; running processes and files outside /workspace were not kept)\n"
+}
+
 // restoredSeqs returns suspended_seq of every sandbox_restored event.
 func restoredSeqs(evs []*adlcv1.Event) []uint64 {
 	var out []uint64
@@ -229,11 +234,11 @@ func TestApproveRestoresLatestSnapshot(t *testing.T) {
 	if !errors.As(err, &ee) || ee.code != 2 {
 		t.Fatalf("first approve: err = %v, stdout %q", err, out)
 	}
-	if !strings.Contains(out, "sandbox: restored fake-2 (files only)\n") || !strings.Contains(out, "sandbox: paused (files only: ") {
+	if !strings.Contains(out, restoredLine("fake-2")) || !strings.Contains(out, "sandbox: paused (files only: ") {
 		t.Errorf("first approve stdout = %q", out)
 	}
 	out, err = approveWith(t, e, "a-call_2", approveScript)
-	if err != nil || !strings.Contains(out, "stop:    completed") || !strings.Contains(out, "sandbox: restored fake-3 (files only)\n") {
+	if err != nil || !strings.Contains(out, "stop:    completed") || !strings.Contains(out, restoredLine("fake-3")) {
 		t.Fatalf("second approve: err = %v, stdout %q", err, out)
 	}
 	evs := runEvents(t, e.db)
@@ -315,7 +320,7 @@ func TestApproveFailureAfterRestorePausesAgain(t *testing.T) {
 	if !errors.As(err, &ee) || ee.code != 1 || !errors.Is(err, harness.ErrAgentMismatch) {
 		t.Fatalf("err = %v", err)
 	}
-	if !strings.Contains(out, "sandbox: restored fake-2 (files only)\n") || !strings.Contains(out, "sandbox: paused (files only: ") {
+	if !strings.Contains(out, restoredLine("fake-2")) || !strings.Contains(out, "sandbox: paused (files only: ") {
 		t.Errorf("stdout = %q", out)
 	}
 	evs := runEvents(t, e.db)

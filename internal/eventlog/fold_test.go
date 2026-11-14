@@ -412,20 +412,35 @@ func TestRunningRunAcceptsSandboxEvents(t *testing.T) {
 	}
 }
 
-// A sandbox event may move only the seq and time, or every digest changes.
+// A sandbox event may move only the seq: a new field would change every
+// digest, and its time or cost would charge the human wait to the budget.
 func TestSandboxEventsChangeNoStateField(t *testing.T) {
-	before := mustFold(t, logOf(awaiting()...))
-	after := *mustFold(t, logOf(awaiting()...))
-	next := sandboxSuspended()
-	next.RunId, next.Seq, next.Time = "r1", before.LastSeq+1, timestamppb.New(t0.Add(time.Hour))
-	if err := after.Apply(next); err != nil {
-		t.Fatalf("Apply: %v", err)
+	tests := []struct {
+		name string
+		ev   *adlcv1.Event
+	}{
+		{"sandbox_suspended", sandboxSuspended()},
+		{"sandbox_restored", sandboxRestored()},
 	}
-	a, b := *before, after
-	a.LastSeq, a.LastEventAt = 0, time.Time{}
-	b.LastSeq, b.LastEventAt = 0, time.Time{}
-	if !reflect.DeepEqual(a, b) {
-		t.Fatalf("sandbox_suspended changed more than seq and time:\n got %+v\nwant %+v", b, a)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := mustFold(t, logOf(awaiting()...))
+			after := *mustFold(t, logOf(awaiting()...))
+			next := tt.ev
+			next.RunId, next.Seq, next.Time = "r1", before.LastSeq+1, timestamppb.New(t0.Add(time.Hour))
+			next.Cost = &adlcv1.Cost{InputTokens: 7}
+			if err := after.Apply(next); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if after.LastSeq != before.LastSeq+1 {
+				t.Fatalf("LastSeq = %d, want %d", after.LastSeq, before.LastSeq+1)
+			}
+			a, b := *before, after
+			a.LastSeq, b.LastSeq = 0, 0
+			if !reflect.DeepEqual(a, b) {
+				t.Fatalf("%s changed more than seq:\n got %+v\nwant %+v", tt.name, b, a)
+			}
+		})
 	}
 }
 
@@ -450,8 +465,19 @@ func TestPausedRunStillRejectsOtherKinds(t *testing.T) {
 }
 
 func TestFinishedRunRejectsSandboxEvents(t *testing.T) {
-	_, err := Fold(logOf(completed(adlcv1.StopReason_STOP_REASON_COMPLETED), sandboxSuspended()))
-	if err == nil || !strings.Contains(err.Error(), "run already finished") {
-		t.Fatalf("err = %v, want run already finished", err)
+	tests := []struct {
+		name string
+		ev   *adlcv1.Event
+	}{
+		{"sandbox_suspended", sandboxSuspended()},
+		{"sandbox_restored", sandboxRestored()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Fold(logOf(completed(adlcv1.StopReason_STOP_REASON_COMPLETED), tt.ev))
+			if err == nil || !strings.Contains(err.Error(), "run already finished") {
+				t.Fatalf("err = %v, want run already finished", err)
+			}
+		})
 	}
 }

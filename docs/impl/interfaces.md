@@ -345,9 +345,12 @@ func (s *Store) Runs(ctx context.Context) ([]string, error)
 Task P.1 adds the event kinds `sandbox_suspended` (`SandboxSuspended`) and
 `sandbox_restored` (`SandboxRestored`). `Fold` accepts them while a run is
 paused or running and they never change `Status` or any other `RunState` field
-except `LastSeq` and `LastEventAt` (a new field would change every digest). A
+except `LastSeq` (a new field would change every digest; their time and cost
+are not counted, so the human wait does not use the wall-clock budget). A
 paused run still rejects every kind except `approval_resolved` and these two;
-a finished run rejects both.
+a finished run rejects both. An older adlc binary cannot fold a run paused by
+a newer one (its paused-state check rejects sandbox events before unknown-kind
+handling).
 
 ## §4 Policy — `internal/policy`
 
@@ -1145,7 +1148,8 @@ var ErrInvalidRef, ErrInvalidAgent, ErrVersionNotFound, ErrNotPromoted, ErrRepor
   `pause: keep`; a failed `Suspend` keeps the container and appends nothing.
 - `attachSandbox(ctx, a, runID, sandboxSource{open, store, dbDir}, stdout)
   (*runSandbox, error)` restores a pending snapshot
-  (`sandbox: restored <id> (files only)`) or does the live lookup as before;
+  (`sandbox: restored <short id> (files only: /workspace kept; running
+  processes and files outside /workspace were not kept)`) or does the live lookup as before;
   `adlc approve` and `adlc resume` call `finish` on the state they get back,
   and after a failed `Approve`/`Resume` pause the sandbox again if the run is
   still paused.
