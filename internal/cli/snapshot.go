@@ -21,6 +21,15 @@ func snapshotPath(dbPath, runID string, seq uint64) string {
 	return filepath.Join(filepath.Dir(dbPath), "snapshots", runID, fmt.Sprintf("%d.tar", seq))
 }
 
+// removeSnapshots deletes every snapshot tar of runID: called once the run
+// no longer waits for approval and its workspace has been copied out.
+func removeSnapshots(dbPath, runID string) error {
+	if err := os.RemoveAll(filepath.Join(filepath.Dir(dbPath), "snapshots", runID)); err != nil {
+		return fmt.Errorf("cli: remove snapshots: %w", err)
+	}
+	return nil
+}
+
 // pendingSnapshot returns the run's latest sandbox_suspended if no later
 // sandbox_restored names it. SnapshotRef is relative to dbDir; the returned
 // TarPath is absolute. The fold keeps no such field (it would change every

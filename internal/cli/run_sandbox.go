@@ -104,7 +104,8 @@ func (s *runSandbox) destroy(ctx context.Context, stdout io.Writer) {
 // finish handles the sandbox after a run that returned a state. A run that
 // awaits approval has its sandbox suspended to a snapshot next to the event
 // log o.db (or kept, with `pause: keep` or when Suspend fails). Otherwise
-// /workspace is copied out and the container destroyed unless --keep-sandbox
+// /workspace is copied out, the run's snapshot tars are deleted, and the
+// container destroyed unless --keep-sandbox
 // is set. If the copy fails the container is kept so the work is not lost.
 func (s *runSandbox) finish(ctx context.Context, o runOptions, store *eventlog.Store, state *eventlog.RunState, stdout io.Writer) error {
 	if s == nil {
@@ -131,6 +132,9 @@ func (s *runSandbox) finish(ctx context.Context, o runOptions, store *eventlog.S
 		return fmt.Errorf("run: copy workspace out: %w", err)
 	}
 	fmt.Fprintf(stdout, "workspace: %s\n", out)
+	if err := removeSnapshots(o.db, s.runID); err != nil {
+		fmt.Fprintf(stdout, "sandbox: could not remove snapshots: %v\n", err)
+	}
 	if o.keepSandbox {
 		fmt.Fprintf(stdout, "sandbox: kept %s\n", s.handle.ID)
 		return nil
