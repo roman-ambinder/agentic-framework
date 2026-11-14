@@ -55,7 +55,8 @@ internal/workflow/engine.go         delete the four review stubs (producerRound,
 internal/workflow/helpers_test.go   fakeRunner: steps keyed by stepKey(tr) (critic runs use "<task>/critic")
 ```
 
-No shared files (`go.mod`, `root.go`, `interfaces.md`, …) change. No proto
+Shared file: `docs/impl/interfaces.md` — append the subsection "W.4 — review
+loop" at the end of §12 (text below); nothing else. No `go.mod`, `root.go`, … change. No proto
 change: `TASK_ROLE_CRITIC`, `TASK_OUTCOME_CHANGES_REQUESTED` and
 `WORKFLOW_OUTCOME_REVIEW_EXHAUSTED` exist since W.2.
 
@@ -67,17 +68,24 @@ change: `TASK_ROLE_CRITIC`, `TASK_OUTCOME_CHANGES_REQUESTED` and
 |---------|---------|-------|
 | `round` | review round, 1-based on every run of a task with `review:` (0 without review, as in W.3) | `Review.MaxRounds` critic runs that said CHANGES |
 | `attempt` | producer attempt number, **per task** (m3.md: "1-based, per task"): it keeps counting across rounds and never resets | `Task.Attempts` producer runs that failed (`CHECKS_FAILED` or `RUN_FAILED`) **in the same round** |
-| `try` | restart of the same run after `ERROR` (W.3) | none |
+| run id | `<workflow-id>-<n>`, one per child run of the workflow (W.3, m3.md decision 14) | none |
 
+- Rounds are numbered from 1 on a task with review (0 without review), m3.md decision 9.
 - Round `r` of the next producer run = `1 + <number of CRITIC records with outcome CHANGES_REQUESTED>`.
 - Inside a round, W.3's rules apply unchanged: `CHECKS_FAILED`/`RUN_FAILED`
   → next attempt in the same round with the retry note, until
   `p.failedInRound(r) >= t.Attempts` → `workflow_completed{FAILED}` (the
   checks failed; this is not a review outcome).
 - A producer `PASSED` in round `r` → the critic runs for round `r`, with
-  `attempt` = that producer's attempt.
+  `attempt` = the attempt of the producer run it reviews (the fold checks this).
+- `ERROR` and `AWAITING_APPROVAL` follow W.3's rules for both roles: after a
+  critic `ERROR` (also `"interrupted"`), the critic of the same attempt and
+  round starts again as a new run (new run id); after a critic
+  `AWAITING_APPROVAL` the same run is continued (new `task_started`, same
+  attempt, round and run id). Neither counts as a round or an attempt.
 - Critic `CHANGES_REQUESTED` in round `r`: `r >= MaxRounds` →
-  `workflow_completed{REVIEW_EXHAUSTED}`; else producer attempt
+  `workflow_completed{REVIEW_EXHAUSTED}`, so the task's last `task_finished`
+  is that critic's `CHANGES_REQUESTED` (m3.md decision 9); else producer attempt
   `lastProducer.attempt + 1`, round `r + 1`.
 
 **Why check failures count per round.** The fix a reviewer asks for often
@@ -98,9 +106,10 @@ P a1 r1 CHECKS_FAILED → P a2 r1 PASSED → C a2 r1 CHANGES_REQUESTED
 
 ### Run ids and commits
 
-From W.3 (unchanged): producer `….<task>.a<attempt>.r<round>`, critic
-`….<task>.a<attempt>.r<round>.critic`, plus `.t<try>` after an `ERROR`.
-Producer commits are `task <id> attempt <n> round <r>` (W.3's
+From W.3 (unchanged): every child run, producer or critic, gets the next
+`<workflow-id>-<n>` (`childRunID(f.id, nextRunNumber(events))`); a
+continuation keeps its id. Role, attempt and round are in the events, not in
+the id. Producer commits are `task <id> attempt <a> round <r>` (W.3's
 `commitMessage`). Critic runs make **no commit**: `task_finished.commit` is
 `""` for every critic record.
 
@@ -275,16 +284,16 @@ func (e *Engine) nextReviewAction(ctx context.Context, f *flow, st *State, event
 func (e *Engine) finishCritic(ctx context.Context, f *flow, t Task, rec *runRecord, h sandbox.Handle, state *eventlog.RunState, runErr error) error
 
 // criticRun builds the critic's runSpec for round of the producer attempt, or actComplete{FAILED} on a render error.
-func (e *Engine) criticRun(ctx context.Context, f *flow, st *State, events []*adlcv1.Event, t Task, p taskProgress, attempt, round, try uint32) (action, error)
+func (e *Engine) criticRun(ctx context.Context, f *flow, st *State, events []*adlcv1.Event, t Task, p taskProgress, attempt, round uint32) (action, error)
 ```
 
 `criticRun` returns `actRun` with
-`runSpec{Role: CRITIC, AgentRef: t.Review.Critic, Attempt: attempt, Round: round, Try: try, Prompt: criticPrompt(...)}`.
+`runSpec{Role: CRITIC, AgentRef: t.Review.Critic, Attempt: attempt, Round: round, Prompt: criticPrompt(...)}`.
 W.3's `execRun` does the rest unchanged: the budget is
 `nestBudget(AgentBudget(t.Review.Critic), t.Budget, w.Budget, spent)`
 (**decision: the task's `budget:` limits the critic's run too** — it is a run
 of the task — and the critic's cost counts towards the workflow budget),
-`task_started{role CRITIC, attempt, round, run_id ….critic, budget}`, a fresh
+`task_started{role CRITIC, attempt, round, run_id <workflow-id>-<n>, budget, sandbox_id}`, a fresh
 sandbox from the workspace (which is the producer's commit), `RunTask` with
 `Role: CRITIC`, then `afterRun` → `finishCritic`.
 
@@ -293,9 +302,9 @@ sandbox from the workspace (which is the producer's commit), `RunTask` with
 | `last` | Action |
 |--------|--------|
 | `t.Review == nil` | error `workflow: task %s: review action without review` |
-| PRODUCER, `PASSED`, round `r > 0` | `criticRun(attempt = last.attempt, round = r, try = 1)` |
-| CRITIC, `ERROR` | `criticRun(same attempt, same round, try = 1 + p.tries(CRITIC, attempt, round))` |
-| CRITIC, `AWAITING_APPROVAL` | `e.parkedAction(ctx, t, last)` (W.3: park again, or continue → `finishCritic`) |
+| PRODUCER, `PASSED`, round `r > 0` | `criticRun(attempt = last.attempt, round = r)` |
+| CRITIC, `ERROR` | `criticRun(same attempt, same round)` — a new run with a new run id |
+| CRITIC, `AWAITING_APPROVAL` | `e.parkedAction(ctx, t, last)` (W.3: park again, or `execContinue` with the same run id and the kept `sandbox_id` → `finishCritic`) |
 | CRITIC, `RUN_FAILED` | `actComplete{FAILED, fmt.Sprintf("task %s: critic run %s failed: %s", t.ID, last.run_id, firstLine(last.detail))}` |
 | CRITIC, `CHANGES_REQUESTED`, round `r >= MaxRounds` | `actComplete{REVIEW_EXHAUSTED, fmt.Sprintf("task %s: not approved after %d review round(s)", t.ID, r)}` |
 | CRITIC, `CHANGES_REQUESTED`, round `r < MaxRounds` | `e.producerRun(ctx, f, st, events, t, p, p.lastOf(PRODUCER).attempt + 1, r + 1, 1)` |
@@ -319,7 +328,7 @@ every `finishTask` has `commit == ""`):
 | 1 | `ctx.Err() != nil` | `ERROR`, `"cancelled"` | nil |
 | 2 | `runErr != nil` | `ERROR`, `"run task: " + runErr` | `workflow: task %s: run task: %w` |
 | 3 | `state == nil` | `ERROR`, `"run task returned no state"` | `workflow: task %s: run task returned no state` |
-| 4 | `AWAITING_APPROVAL` | `AWAITING_APPROVAL`, `"sandbox " + h.ID`; `keep = true` | nil |
+| 4 | `AWAITING_APPROVAL` | `e.finishTaskKeep(ctx, f, rec, h.ID)` (`sandbox_id` = the kept sandbox); `keep = true` | nil |
 | 5 | not `COMPLETED` | `RUN_FAILED`, `runStoppedDetail(state)` | nil |
 | 6 | `parseVerdict(state.Result)` = approve | `PASSED`, `line` (e.g. `VERDICT: APPROVE`) | nil |
 | 7 | = changes | `CHANGES_REQUESTED`, `line` | nil |
@@ -332,8 +341,8 @@ sandbox is destroyed with it.
 
 | Situation | Events (workflow log) |
 |-----------|-----------------------|
-| producer round `r` | `task_started{PRODUCER, attempt, round r, run_id ….a<n>.r<r>}`, `task_finished{PRODUCER, …, commit}` (W.3) |
-| critic round `r` | `task_started{CRITIC, attempt of the reviewed producer run, round r, run_id ….a<n>.r<r>.critic, budget}`, `task_finished{CRITIC, PASSED / CHANGES_REQUESTED / RUN_FAILED / AWAITING_APPROVAL / ERROR, detail, commit ""}` |
+| producer round `r` | `task_started{PRODUCER, attempt, round r, run_id, sandbox_id}`, `task_finished{PRODUCER, …, commit}` (W.3) |
+| critic round `r` | `task_started{CRITIC, attempt of the reviewed producer run, round r, run_id, budget, sandbox_id}`, `task_finished{CRITIC, PASSED / CHANGES_REQUESTED / RUN_FAILED / AWAITING_APPROVAL / ERROR, detail, commit "", sandbox_id only when AWAITING_APPROVAL}` |
 | reviews used up | `workflow_completed{REVIEW_EXHAUSTED, "task <id>: not approved after <n> review round(s)"}` |
 | critic failed | `workflow_completed{FAILED, "task <id>: critic run <run-id> failed: <detail>"}` |
 
@@ -351,14 +360,30 @@ All decisions come from the log (W.3's `next` + `nextReviewAction`), so:
 | Last event | Resume does |
 |------------|-------------|
 | `task_finished{PRODUCER, PASSED, round r}` | starts the critic of round `r` |
-| `task_started{CRITIC}` (crash during the critic) | W.3 closes it `ERROR`/interrupted; critic restarts with try + 1 (`….critic.t2`), same attempt and round; the producer is not re-run |
+| `task_started{CRITIC}` (crash during the critic) | W.3 closes it `ERROR`/interrupted; the critic of the same attempt and round starts again as a new run (next run id); the producer is not re-run |
 | `task_finished{CRITIC, CHANGES_REQUESTED, r}` | producer round `r + 1` with the feedback note (read from the critic's child run in `Runs`) — or `REVIEW_EXHAUSTED` when `r == MaxRounds` |
 | `task_finished{CRITIC, PASSED}` | next task |
-| `task_finished{CRITIC, AWAITING_APPROVAL}` | parks again, or continues the critic once its run finished (no collect) |
+| `task_finished{CRITIC, AWAITING_APPROVAL}` | parks again, or continues the critic once its run finished: new `task_started` with the same run id, then the verdict (no collect) |
 | `task_finished{CRITIC, RUN_FAILED}` | `workflow_completed{FAILED}` |
 
 W.3's Resume restores the workspace to the last recorded commit; critics
 record none, so the critic's sandbox always starts from the commit it reviews.
+
+### `interfaces.md` text
+
+Append at the end of §12 (after W.3's subsection; do not reorder):
+
+```markdown
+### W.4 — review loop (`internal/workflow`)
+
+`review:` runs rounds 1..`max_rounds`: producer attempts (up to `attempts` failed per round,
+numbered across the task) until checks pass, then a critic run (role CRITIC, attempt = the
+reviewed producer attempt, fresh sandbox, never commits). Verdict = last non-empty line,
+matched case-insensitively as `VERDICT: APPROVE` / `VERDICT: CHANGES` after trimming spaces and Markdown `*`, `_`, backticks;
+missing = CHANGES. CHANGES → next round with the critic's message appended to the producer
+prompt; after `max_rounds` → `workflow_completed{REVIEW_EXHAUSTED}`. A critic run that does not
+complete → `FAILED`. Critic `ERROR`/`AWAITING_APPROVAL` follow the producer rules.
+```
 
 ## Steps
 
@@ -401,23 +426,23 @@ tasks:
 | `TestParseVerdict` | table (msg → verdict, line, body): `"ok\nVERDICT: APPROVE"` → approve, `VERDICT: APPROVE`, `ok`; `"x\nverdict: changes"` → changes; `"x\n  **VERDICT: APPROVE**  \n\n"` → approve, `VERDICT: APPROVE`; `"x\n`VERDICT: CHANGES`"` → changes; `"x\nVerdict : Approve."` → approve; `"x\r\nVERDICT: APPROVE\r\n"` → approve, body `x`; `"VERDICT: APPROVE\nthanks"` → none, body = whole message; `"VERDICT: APPROVE, nice"` → none; `"VERDICT: MAYBE"` → none; `""` → none, `""`, `""` |
 | `TestCriticPromptExact` | `criticPrompt("Implement it.\n", "diff --git a/x b/x\n+y\n", []string{"go build ./...", "go test ./..."})` equals the full expected string written out in the test; with no checks the checks section is `noChecksText`; with `""` diff it is `(no changes)` |
 | `TestCapText` | `MaxTemplateValueBytes + 10` bytes → length `MaxTemplateValueBytes + len(TruncatedMarker)` at most, ends with `TruncatedMarker`, valid UTF-8 (input with a 3-byte rune across the cut); short text unchanged |
-| `TestReviewApprovedFirstRound` | producer step creates `done.txt`; critic step result `"Looks right.\nVERDICT: APPROVE"` → kinds `workflow_started, task_started, task_finished, task_started, task_finished, …` with: P `attempt 1 round 1 PASSED` run id `….impl.a1.r1`, commit message `task impl attempt 1 round 1`; C `attempt 1 round 1 PASSED` detail `VERDICT: APPROVE`, run id `….impl.a1.r1.critic`, commit `""`; then task `after` runs; `COMPLETED`; `TaskState["impl"].Passed` |
+| `TestReviewApprovedFirstRound` | producer step creates `done.txt`; critic step result `"Looks right.\nVERDICT: APPROVE"` → kinds `workflow_started, task_started, task_finished, task_started, task_finished, …` with: P `attempt 1 round 1 PASSED` run id `<id>-1`, commit message `task impl attempt 1 round 1`; C `attempt 1 round 1 PASSED` detail `VERDICT: APPROVE`, run id `<id>-2`, commit `""`; then task `after` runs; `COMPLETED`; `TaskState["impl"].Passed` |
 | `TestCriticTaskRun` | the critic's `TaskRun`: `Role == CRITIC`, `AgentRef == "critic.yaml"`, `Prompt == criticPrompt(rendered, diff of done.txt, checks)`; `AgentBudget` was called with `critic.yaml`; `task_started.budget` is the nested critic budget |
 | `TestCriticChangesAreDiscarded` | critic step writes `critic.txt` and edits `done.txt` → neither change is in the workspace nor in any commit; the critic's sandbox is destroyed |
-| `TestReviewChangesThenApprove` | critic 1 `"Add a test.\nVERDICT: CHANGES"`, critic 2 approves → producer 2 is `attempt 2 round 2`, run id `….impl.a2.r2`, prompt == `"Implement it."` + `fmt.Sprintf(reviewNoteFormat, 1, "Add a test.")` (whole string); critic 2 is `….impl.a2.r2.critic` and its prompt's diff is the cumulative change from the task's base commit; `COMPLETED` |
+| `TestReviewChangesThenApprove` | critic 1 `"Add a test.\nVERDICT: CHANGES"`, critic 2 approves → producer 2 is `attempt 2 round 2`, run id `<id>-3`, prompt == `"Implement it."` + `fmt.Sprintf(reviewNoteFormat, 1, "Add a test.")` (whole string); critic 2 is `attempt 2 round 2`, run id `<id>-4`, and its prompt's diff is the cumulative change from the task's base commit; `COMPLETED` |
 | `TestReviewExhausted` | critic says CHANGES twice → `workflow_completed{REVIEW_EXHAUSTED, "task impl: not approved after 2 review round(s)"}`; 2 producer and 2 critic runs; task `after` never starts |
 | `TestMissingVerdictCountsAsChanges` | critic 1 result `"Please rename x."` (no verdict) → critic `task_finished{CHANGES_REQUESTED, noVerdictDetail}`; producer 2's feedback is `Please rename x.` |
 | `TestEmptyCriticMessage` | critic 1 result `"VERDICT: CHANGES"` → producer 2's feedback is `noFeedbackText` |
-| `TestChecksFailInsideReviewRounds` | the example under "Rounds and attempts": run ids `….a1.r1`, `….a2.r1`, `….a2.r1.critic`, `….a3.r2`, `….a4.r2`, `….a4.r2.critic`; outcomes CHECKS_FAILED, PASSED, CHANGES_REQUESTED, CHECKS_FAILED, PASSED, PASSED; producer a4's prompt = rendered + feedback note (round 1) + retry note of a3; `COMPLETED` |
+| `TestChecksFailInsideReviewRounds` | the example under "Rounds and attempts": (role, attempt, round, run id): (P,1,1,`-1`), (P,2,1,`-2`), (C,2,1,`-3`), (P,3,2,`-4`), (P,4,2,`-5`), (C,4,2,`-6`); outcomes CHECKS_FAILED, PASSED, CHANGES_REQUESTED, CHECKS_FAILED, PASSED, PASSED; producer a4's prompt = rendered + feedback note (round 1) + retry note of a3; `COMPLETED` |
 | `TestChecksExhaustedInsideRound2` | round 2 fails checks twice → `workflow_completed{FAILED, "task impl failed after 2 attempt(s): …"}` (not REVIEW_EXHAUSTED) |
-| `TestCriticRunFailedFailsWorkflow` | critic step `stop: BUDGET_EXHAUSTED` → critic `RUN_FAILED`; `workflow_completed{FAILED}` with detail prefix `task impl: critic run ….impl.a1.r1.critic failed: run stopped: BUDGET_EXHAUSTED` |
-| `TestCriticRunTaskErrorIsRestarted` | critic step `err` → `Start` returns the error, last event critic `ERROR`; `Resume` → critic run id `….impl.a1.r1.critic.t2`, producer not re-run |
-| `TestCriticParksAndContinues` | critic step `stop: AWAITING_APPROVAL` → workflow `awaiting_approval`, critic sandbox kept; finish the critic's child run with result `"ok\nVERDICT: APPROVE"` (append `approval_resolved` and `run_completed` to `Runs`) → `Resume` writes critic `task_started` (same run id) + `task_finished{PASSED}`; no commit is made; sandbox destroyed |
-| `TestResumeDuringCriticRun` | `truncateLog` after the critic's `task_started` → `Resume` appends critic `ERROR` (interrupted), critic `….critic.t2`, its `task_finished`; the producer fake is not called again |
+| `TestCriticRunFailedFailsWorkflow` | critic step `stop: BUDGET_EXHAUSTED` → critic `RUN_FAILED`; `workflow_completed{FAILED}` with detail prefix `task impl: critic run <id>-2 failed: run stopped: BUDGET_EXHAUSTED` |
+| `TestCriticRunTaskErrorIsRestarted` | critic step `err` → `Start` returns the error, last event critic `ERROR`; `Resume` → a critic `task_started{CRITIC, attempt 1, round 1, run_id <id>-3}` (`<id>-2` was the failed critic run, whose `task_started` was written before `RunTask`); producer not re-run |
+| `TestCriticParksAndContinues` | critic step `stop: AWAITING_APPROVAL` → workflow `awaiting_approval`, critic sandbox kept; finish the critic's child run with result `"ok\nVERDICT: APPROVE"` (append `approval_resolved` and `run_completed` to `Runs`) → the parked `task_finished` has `sandbox_id` set → `Resume` writes critic `task_started` (same run id, same `sandbox_id`) + `task_finished{PASSED}`; no commit is made; sandbox destroyed |
+| `TestResumeDuringCriticRun` | `truncateLog` after the critic's `task_started` → `Resume` appends critic `task_finished{ERROR, "interrupted"}`, then a critic `task_started` with the same attempt and round and the next run id, then its `task_finished`; the producer fake is not called again |
 | `TestResumeAfterChangesRequested` | cut after critic 1's `task_finished{CHANGES_REQUESTED}` → `Resume` runs producer `attempt 2 round 2` with the feedback note read from critic 1's child run |
 | `TestResumeAfterProducerPassedBeforeCritic` | cut after producer 1's `task_finished{PASSED}` → `Resume` runs only the critic of round 1 |
 | `TestResultAndDiffUseProducer` | in the two-round approve run, task `after`'s prompt is `<producer 2's result>|<diff from impl's base to producer 2's commit>` — never the critic's message |
-| `TestNoReviewKeepsRoundZero` | a task without `review:` → `round 0`, no critic run, run id without `.r` (W.3 behaviour unchanged) |
+| `TestNoReviewKeepsRoundZero` | a task without `review:` → `round 0`, no critic run (W.3 behaviour unchanged) |
 
 ## Verify
 

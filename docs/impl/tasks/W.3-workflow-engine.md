@@ -79,7 +79,7 @@ Change (shared files, keep the change to the lines named):
 
 ```
 internal/evals/runner.go     add GoEnv() (5 lines, below goEnv); nothing else
-docs/impl/interfaces.md      §9: add "GoEnv() map[string]string" to the evals list (one line)
+docs/impl/interfaces.md      append the subsection "W.3 — engine" at the end of §12 (text under "interfaces.md text"); nothing else
 ```
 
 No new dependencies (`google.golang.org/protobuf` with `durationpb`,
@@ -124,7 +124,7 @@ type Options struct {
 	Sandbox     sandbox.Sandbox
 	Image       string            // "" = evals.DefaultImage
 	Env         map[string]string // sandbox env; nil = evals.GoEnv()
-	BaseDir     string            // ".adlc/workflows"; made absolute by New
+	BaseDir     string            // decision 4: <dir of --workflow-db>/workflows (the CLI computes it); made absolute by New
 	RunTask     func(ctx context.Context, tr TaskRun) (*eventlog.RunState, error)
 	AgentBudget func(ref string) (*adlcv1.Budget, error) // the agent's own budget, for nesting
 	Now         func() time.Time  // nil = time.Now
@@ -298,9 +298,10 @@ ignored; print `workflow <id>: workspace from <repo> at <head> (committed files 
 resumed workflow renders the same prompts even if the user edited the file.
 
 **Base commit.** After the workspace is filled (or left empty), `g.commit`
-with messages `"base"` and, when there is a repo, `"source-commit: <head>"`
-(a second paragraph; W.5 reads it to branch from the right commit). Its
-hash is `WorkflowStarted.base_commit`.
+with the single message `"base"`. Its hash is `WorkflowStarted.base_commit`;
+the repo's `head` is `WorkflowStarted.source_commit` (`""` without a repo).
+The field is the only record of the source commit: export (W.5) bases its
+branch on it (m3.md decision 11).
 
 ### Collecting a sandbox's workspace (`workspace.go`)
 
@@ -357,7 +358,6 @@ func progressOf(events []*adlcv1.Event, taskID string) taskProgress
 func (p taskProgress) last() *runRecord                             // nil if no records
 func (p taskProgress) lastOf(role adlcv1.TaskRole) *runRecord       // nil if none
 func (p taskProgress) failedInRound(round uint32) int               // PRODUCER records of that round with outcome CHECKS_FAILED or RUN_FAILED
-func (p taskProgress) tries(role adlcv1.TaskRole, attempt, round uint32) int // records with that role/attempt/round and outcome ERROR
 func (p taskProgress) lastFailure(round uint32) *runRecord          // last PRODUCER record of that round with CHECKS_FAILED or RUN_FAILED
 func (p taskProgress) lastCommit() string                           // last non-empty TaskFinished.commit of the task; "" if none
 
@@ -371,27 +371,26 @@ A `task_finished` belongs to the newest open record of the same `task_id`.
 latest non-empty commit (`base_commit`, then every `task_finished.commit`),
 and take its value at the task's first `task_started`.
 
-### Child run ids
+### Child run ids (m3.md decision 14)
 
 ```go
-// childRunID is the run id of one child run, derived only from the log.
-func childRunID(workflowID, taskID string, role adlcv1.TaskRole, attempt, round, try uint32) string
+// childRunID is "<workflowID>-<n>".
+func childRunID(workflowID string, n int) string
+
+// nextRunNumber is 1 + the number of distinct non-empty TaskStarted.run_id values in events.
+func nextRunNumber(events []*adlcv1.Event) int
 ```
 
-`strings.ReplaceAll(workflowID, "@", "-v") + "." + taskID + ".a<attempt>"`,
-then `".r<round>"` if `round > 0`, `".critic"` if role is CRITIC, `".t<try>"` if `try > 1`.
-
-| workflowID, task, role, attempt, round, try | run id |
-|---------------------------------------------|--------|
-| `sdlc@1-20261114T101500Z-a1b2c3`, `implement`, PRODUCER, 1, 0, 1 | `sdlc-v1-20261114T101500Z-a1b2c3.implement.a1` |
-| same, PRODUCER, 2, 0, 1 | `sdlc-v1-20261114T101500Z-a1b2c3.implement.a2` |
-| same, PRODUCER, 1, 0, 2 | `sdlc-v1-20261114T101500Z-a1b2c3.implement.a1.t2` |
-| same, CRITIC, 3, 2, 1 | `sdlc-v1-20261114T101500Z-a1b2c3.implement.a3.r2.critic` |
-
-`@` is replaced because `adlc kill run` accepts only `^[A-Za-z0-9._-]{1,64}$`.
-`try` counts restarts of the *same* attempt after an `ERROR` (crash,
-infrastructure failure): `try = 1 + p.tries(role, attempt, round)`. A run that
-parked and is continued keeps its run id (it is the same harness run).
+A new child run gets `childRunID(f.id, nextRunNumber(events))`, with `events`
+read just before its `task_started` is written: `t-v1-20261114T101500Z-abcdef-1`,
+`…-2`, … across all tasks and roles. A **continuation** of a parked run
+writes a new `task_started` with the **same** run id (decision 10), so it
+does not count again. An `ERROR` restart is a new run and gets the next
+number. Export tasks have `run_id ""` and do not count. The workflow id has
+at most 58 characters, so every child run id fits the repository's run-id
+rule `^[A-Za-z0-9._-]{1,64}$` up to 99 999 runs; `adlc kill run`, `trace` and
+`cost` work on it unchanged. The number is derived from the log only, so a
+resumed workflow continues the sequence.
 
 ### Budgets (`budget.go`)
 
@@ -422,7 +421,7 @@ func nestBudget(agent *adlcv1.Budget, task, wf Budget, used spend) (*adlcv1.Budg
 3. Wall clock = the time tasks were **active**, not the time since
    `workflow_started`. For every run record of every task:
    - finished, not interrupted: `FinishedAt − StartedAt`;
-   - finished with `ERROR` and `detail == interruptedDetail`: `child.LastEventAt − StartedAt`
+   - finished with `ERROR` and `detail == interruptedDetail` (`"interrupted"`): `child.LastEventAt − StartedAt`
      if the child run exists and `LastEventAt` is after `StartedAt`, else 0;
    - open (no `task_finished`): `now − StartedAt`.
    Negative values count as 0.
@@ -596,7 +595,7 @@ const (
 type runSpec struct {
 	Role                  adlcv1.TaskRole
 	AgentRef              string
-	Attempt, Round, Try   uint32
+	Attempt, Round        uint32
 	Prompt                string
 }
 
@@ -668,7 +667,7 @@ For task `t`, with `p := progressOf(events, t.ID)`:
       e.g. an auto-approved gate; check with `Log.Read(ctx, f.id, st.LastSeq)`)
       → `actReload`, so `f.lastSeq` is fresh before anything else is appended.
    b. `t.Kind == "export"` → `actExport`.
-   c. Producer run: attempt 1, round `e.producerRound(t, p)` (W.4 hook, 0 here), try 1.
+   c. Producer run: attempt 1, round `e.producerRound(t, p)` (W.4 hook, 0 here).
 2. `last := p.last()`; `last.Finished == nil` → error
    `workflow: task %s run %s has no task_finished` (Resume closes open records first, so drive never sees one).
 3. `t.Kind == "export"` (it has a record but the fold did not mark it passed):
@@ -676,11 +675,11 @@ For task `t`, with `p := progressOf(events, t.ID)`:
    Export never retries and an export `ERROR` is not restarted (W.5).
    `last.Started.Role != PRODUCER` → `e.nextReviewAction(ctx, f, st, events, t, p)` (W.4 hook).
 4. By `last.Finished.Outcome`:
-   - `ERROR`: producer run with the same attempt and round, `try = 1 + p.tries(PRODUCER, attempt, round)`.
+   - `ERROR`: producer run with the same attempt and round (a new run, so a new run id: decision 8).
    - `AWAITING_APPROVAL`: `e.parkedAction(ctx, t, last)`.
    - `CHECKS_FAILED`, `RUN_FAILED`: `n := p.failedInRound(round)`; if `n >= t.Attempts`:
      `actComplete{FAILED, fmt.Sprintf("task %s failed after %d attempt(s): %s", t.ID, n, firstLine(last.Finished.Detail))}`;
-     else producer run with `attempt = last.Started.Attempt + 1`, same round, try 1.
+     else producer run with `attempt = last.Started.Attempt + 1`, same round.
    - `PASSED` (the fold did not mark the task passed, so it has a review): `e.nextReviewAction(...)`.
    - anything else: error `workflow: task %s: unexpected outcome %s`.
 
@@ -688,7 +687,7 @@ For task `t`, with `p := progressOf(events, t.ID)`:
 
 ```go
 // producerRun builds the prompt of a producer run and returns actRun, or actComplete{FAILED} on a render error.
-func (e *Engine) producerRun(ctx context.Context, f *flow, st *State, events []*adlcv1.Event, t Task, p taskProgress, attempt, round, try uint32) (action, error)
+func (e *Engine) producerRun(ctx context.Context, f *flow, st *State, events []*adlcv1.Event, t Task, p taskProgress, attempt, round uint32) (action, error)
 ```
 
 It builds the prompt (see Prompts) and returns `actRun` with
@@ -711,20 +710,31 @@ func (e *Engine) parkedAction(ctx context.Context, t Task, rec *runRecord) (acti
    (error → `workflow: task %s: agent budget: %w`, nothing written).
 2. `b, detail := nestBudget(ab, t.Budget, f.w.Budget, used)`; detail ≠ "" →
    `add(workflow_completed{BUDGET_EXHAUSTED, "workflow budget: " + detail})`, return nil.
-3. `runID := childRunID(f.id, t.ID, spec.Role, spec.Attempt, spec.Round, spec.Try)`.
-4. `add(task_started{task_id, role, attempt, round, run_id, budget: b})`; print
+3. `runID := childRunID(f.id, nextRunNumber(events))`.
+4. `h, err := Sandbox.Create(ctx, spec of the run)`; error → return
+   `workflow: task %s: create sandbox: %w` with **nothing written** (no run
+   started; the workflow stays `running` and Resume tries again).
+5. `add(task_started{task_id, role, attempt, round, run_id, budget: b, sandbox_id: h.ID})`;
+   if the append fails, destroy `h` and return the error. Print
    `task <t>: <role> attempt <a>[ round <r>] started, run <run-id>`.
-5. `h, err := Sandbox.Create(ctx, spec of the run)`; error →
-   `finishTask(ERROR, "create sandbox: " + err)`, return `workflow: task %s: create sandbox: %w`.
 6. `state, err := e.o.RunTask(ctx, TaskRun{runID, f.id, t, spec.Role, spec.AgentRef, spec.Prompt, b, e.o.Sandbox, h})`.
 7. `return e.afterRun(ctx, f, t, rec, h, state, err)` where `rec` is the record just started.
 
-**`execContinue(ctx, f, t, rec)`** (a parked run that has since finished):
-`add(task_started)` with a copy of `rec.Started` (same task, role, attempt,
-round, run id, budget); `id, ok := strings.CutPrefix(rec.Finished.Detail, "sandbox ")`
-(not ok → `finishTask(ERROR, "parked run has no sandbox id")` and return an
-error); `state, err := Runs.State(ctx, run id)`; then
-`e.afterRun(ctx, f, t, newRec, sandbox.Handle{ID: id}, state, err)`.
+The sandbox is created before `task_started` so that the event can name it
+(`TaskStarted.sandbox_id`).
+
+**`execContinue(ctx, f, t, rec)`** (a parked run that has since finished,
+m3.md decision 10 and the fold's continuation rule):
+
+1. `id := rec.Finished.SandboxId` (the kept sandbox); `""` → error
+   `workflow: task %s: parked run %s has no sandbox id`, nothing written.
+2. `add(task_started)` with a copy of `rec.Started`: same task, role,
+   attempt, round, **run id**, budget, and `sandbox_id: id`.
+3. `state, err := Runs.State(ctx, run id)`.
+4. `e.afterRun(ctx, f, t, newRec, sandbox.Handle{ID: id}, state, err)` — the
+   producer path copies the kept sandbox out (`collect`), commits, runs the
+   checks and destroys the sandbox. If the sandbox is gone, `collect` fails
+   → `ERROR` (row 5), and the next Resume starts the same attempt as a new run.
 
 ```go
 // afterRun finishes a child run by role. W.3 knows PRODUCER; CRITIC is W.4's finishCritic.
@@ -747,7 +757,7 @@ func (e *Engine) afterRun(ctx context.Context, f *flow, t Task, rec *runRecord, 
 | 1 | `ctx.Err() != nil` | `ERROR`, `"cancelled"`, `""` | nil (drive then writes `CANCELLED`) |
 | 2 | `runErr != nil` | `ERROR`, `"run task: " + runErr`, `""` | `workflow: task %s: run task: %w` |
 | 3 | `state == nil` | `ERROR`, `"run task returned no state"`, `""` | `workflow: task %s: run task returned no state` |
-| 4 | `state.StopReason == AWAITING_APPROVAL` | `AWAITING_APPROVAL`, `"sandbox " + h.ID`, `""`; **`keep = true`** | nil |
+| 4 | `state.StopReason == AWAITING_APPROVAL` | `AWAITING_APPROVAL`, `""`, `""`, **`sandbox_id: h.ID`**; **`keep = true`** | nil |
 | 5 | `hash, dropped, err := e.collect(ctx, f, h, commitMessage(...))` fails | `ERROR`, `"collect workspace: " + err`, `""` | `workflow: task %s: collect workspace: %w` |
 | 6 | `state.StopReason != COMPLETED` | `RUN_FAILED`, `runStoppedDetail(state)`, `hash` | nil |
 | 7 | `detail, ok, err := e.runChecks(...)`: `err != nil` | as row 1 if `ctx.Err() != nil`; else `ERROR`, `"run checks: " + err`, `hash` | nil for cancel, else `workflow: task %s: run checks: %w` |
@@ -759,31 +769,38 @@ plus `": " + state.StopDetail` when it is not empty.
 
 ```go
 // finishTask writes task_finished for rec (same task_id, role, attempt, round, run_id) and prints the outcome line.
+// It sets sandbox_id only for AWAITING_APPROVAL (the kept sandbox): finishTaskKeep.
 func (e *Engine) finishTask(ctx context.Context, f *flow, rec *runRecord, outcome adlcv1.TaskOutcome, detail, commit string) error
+
+// finishTaskKeep writes task_finished{AWAITING_APPROVAL, sandbox_id: sandboxID}.
+func (e *Engine) finishTaskKeep(ctx context.Context, f *flow, rec *runRecord, sandboxID string) error
 ```
 
 **Decision: `ERROR` means "this run did not really happen; do it again".**
 An `ERROR` (crash, Docker down, copy-out failed, `RunTask` returned an error)
 does **not** use up an attempt and does not end the workflow: the engine
 returns the error (the CLI exits 1, the workflow stays `running`), and the
-next `Resume` repeats the same attempt with a new run id (`.t2`, `.t3`, …).
+next `Resume` repeats the same attempt as a new run, with the next run id
+(m3.md decision 8).
 Infrastructure problems are fixed by a person; counting them as attempts
 would fail workflows with the default `attempts: 1` for reasons that have
 nothing to do with the agent. Cancellation is the exception: like the
 harness, a cancelled workflow is finished (`CANCELLED`).
 
 **Decision: a parked child parks the workflow; its sandbox is kept.** The
-child's sandbox is not destroyed (row 4) so `adlc approve` can continue the
-run in it (it finds the sandbox by the `adlc.run_id` label = child run id).
-The handle id is recorded as the detail `sandbox <id>` so a later `Resume`,
-in another process, can copy that sandbox's workspace out (row 5 of
-`execContinue` → `finishProducer`). Fold (W.2) reports the workflow as
-`awaiting_approval` while the last `task_finished` is `AWAITING_APPROVAL`.
+child's sandbox is not destroyed (row 4) so `adlc approve` (extended by W.5)
+can continue the run in it. The handle id is in `TaskStarted.sandbox_id` and
+`TaskFinished.sandbox_id`; a later `Resume`, in another process, copies that
+sandbox's workspace out (`execContinue`). The sandbox's `Spec.RunID` label
+is the child run id as well. Fold (W.2) reports the workflow as
+`awaiting_approval` after `task_finished{AWAITING_APPROVAL}` and `running`
+again after the continuation's `task_started`.
 
 ### Start
 
 1. `w == nil` → error `workflow: Start: workflow is nil`. `id` must match
-   `^[A-Za-z0-9@._-]{1,128}$` and not start with `.` (`workflow: invalid workflow id %q`).
+   `^[A-Za-z0-9][A-Za-z0-9_-]{0,57}$` (`workflow: invalid workflow id %q`;
+   m3.md decision 14 — `Workflow.ID` always matches).
 2. Validate the inputs (see "Workspace from the inputs"). Nothing is written yet.
 3. `events, err := Log.Read(ctx, id, 0)`; `len(events) > 0` → `fmt.Errorf("%w: %s", ErrWorkflowExists, id)`.
    `<BaseDir>/<id>` exists → `fmt.Errorf("%w: %s exists (remove it to start again)", ErrWorkflowExists, dir)`.
@@ -792,7 +809,7 @@ in another process, can copy that sandbox's workspace out (row 5 of
    the base commit. On any error in this step remove `dir` (`removeUnder(BaseDir, dir)`;
    it did not exist before step 4) and return the error.
 5. `add(workflow_started{workflow_name: w.Name, workflow_version: w.Version, workflow_digest: w.Digest,
-   inputs, budget, base_commit})` with `Seq: 1`. Print `workflow <id>: started, workspace <ws>`.
+   inputs, budget, base_commit, source_commit})` with `Seq: 1`. Print `workflow <id>: started, workspace <ws>`.
 6. `return e.drive(ctx, f)`.
 
 ### Resume
@@ -804,39 +821,42 @@ in another process, can copy that sandbox's workspace out (row 5 of
 5. `<dir>/git` must be a directory (`workflow: %s: git directory %s is missing`).
 6. **Close an interrupted run.** If any task's last record is open
    (`st.Tasks[...].Running`; at most one), `finishTask(ERROR, interruptedDetail, "")`
-   for it, where
+   for it, then destroy the sandbox named by its `TaskStarted.sandbox_id` (if
+   any; `context.WithoutCancel`; a failure — usually "not found" — only prints
+   the destroy line), where
 
    ```go
-   // interruptedDetail is the task_finished detail Resume writes for a run that was in progress when the engine stopped.
-   const interruptedDetail = "interrupted: the engine stopped while this run was in progress"
+   // interruptedDetail is the task_finished detail Resume writes for a run that was in progress when the engine stopped (m3.md decision 3).
+   const interruptedDetail = "interrupted"
    ```
 
 7. `f.git.restore(ctx, lastCommit(events))` (after step 6 the new event does
    not change it); also `removeUnder(dir, dir/incoming)` and `dir/previous`.
 8. Print `workflow <id>: resumed`; `return e.drive(ctx, f)`.
 
-**Decision: an interrupted run is closed as `ERROR` and redone, never
-continued.** Continuing the child (harness `Resume`) would need its sandbox,
-which the engine cannot find after a crash (`sandbox.Sandbox` has no lookup,
-and no event names it), and a child that half-finished in a sandbox nobody
-can reach cannot be collected. Redoing the attempt from the last committed
+**Why an interrupted run is closed as `ERROR` and redone, never continued
+(m3.md decision 3).** Continuing the child (harness `Resume`) would need a
+live harness process attached to its sandbox and a run log that ends at a
+verified checkpoint; neither is guaranteed after a crash, and the engine's
+own post-run steps (collect, commit, checks) may have been half done.
+Redoing the attempt from the last committed
 workspace is always possible and always safe: the workspace on the host is
 only ever replaced by a completed swap followed by a commit, and step 7
 rebuilds it from the last commit the log knows about, discarding any later
 orphan commit or half-written `incoming/`. Cost: the interrupted run's work
-(at most one task's run, decision 3). The orphaned child run and its
-sandbox are left as they are (out of scope).
+(at most one task's run, decision 3). The orphaned child run is left as it
+is; its sandbox is destroyed in step 6 (it is named in `TaskStarted.sandbox_id`).
 
 Resume after a crash at each point:
 
 | Last event in the log | What Resume does |
 |-----------------------|------------------|
 | `workflow_started` | runs the first task |
-| `task_started` (crash during the run, collect or checks) | step 6 writes `task_finished{ERROR, interrupted…}`; `next` repeats the attempt with try + 1 |
+| `task_started` (crash during the run, collect or checks) | step 6 writes `task_finished{ERROR, "interrupted"}`; `next` starts the same attempt as a new run (next run id) |
 | `task_finished{PASSED}` | next task (or `workflow_completed{COMPLETED}` if it was the last) |
 | `task_finished{CHECKS_FAILED/RUN_FAILED}` | next attempt, or `workflow_completed{FAILED}` when attempts are used up |
-| `task_finished{ERROR}` | same attempt, try + 1 |
-| `task_finished{AWAITING_APPROVAL}` | child still paused → parks again (no event); child finished → `execContinue` |
+| `task_finished{ERROR}` | same attempt, new run id |
+| `task_finished{AWAITING_APPROVAL}` | child still paused → parks again (no event); child finished → `execContinue` (new `task_started`, same run id, copy the kept sandbox out) |
 | `workflow_completed` | `ErrWorkflowFinished` |
 
 A crash between `collect`'s commit and `task_finished` leaves a commit the
@@ -905,8 +925,27 @@ Helpers W.4 and W.5 will call (keep their names and signatures):
 `progressOf`, `taskProgress` methods, `runRecord`, `runSpec`, `action` and its
 kinds, `e.producerRun`, `e.execRun` (role-generic), `e.parkedAction`,
 `e.finishTask`, `e.add`, `e.appendEvent`, `e.fold`, `e.newFlow`, `e.drive`,
-`e.spent`, `nestBudget`, `childRunID`, `f.git` (`diff`, `run`), `flowSources`,
+`e.spent`, `nestBudget`, `childRunID`, `nextRunNumber`, `e.finishTaskKeep`, `f.git` (`diff`, `run`), `flowSources`,
 `firstLine`, `removeUnder`.
+
+### `interfaces.md` text
+
+Append at the end of §12 (W.1 creates §12; do not create or reorder it):
+
+```markdown
+### W.3 — engine (`internal/workflow`)
+
+`TaskRun`, `Options` (`Log`, `Runs`, `Sandbox`, `Image`, `Env`, `BaseDir`, `RunTask`,
+`AgentBudget`, `Now`, `Stdout`; `Gates` is added by W.5, `SkipExport` by W.6), `Engine`,
+`New`, `Start`, `Resume`, `Workspace`; errors `ErrWorkflowExists`, `ErrWorkflowNotFound`,
+`ErrWorkflowChanged`, `ErrWorkflowFinished`. Layout `<BaseDir>/<id>/{workspace,git,inputs}`;
+all host git with `--git-dir`, hooks and fsmonitor off, no inherited `GIT_*`, identity
+`adlc <adlc@localhost>`. Child run ids `<workflow-id>-<n>`; `sandbox_id` in `task_started`
+and in a parked `task_finished`. `ERROR` (also `"interrupted"` on Resume) repeats the same
+attempt as a new run. Checks: `sh -c`, fresh sandbox, first failure stops, 10 min each.
+Evals: `evals.GoEnv() map[string]string` (copy of the eval sandbox environment).
+`internal/evals` never imports `internal/workflow`.
+```
 
 ## Steps
 
@@ -915,7 +954,7 @@ kinds, `e.producerRun`, `e.execRun` (role-generic), `e.parkedAction`,
    `WithFirstKind` and the `adlcv1` names (`adlcv1.TaskRole_TASK_ROLE_PRODUCER`,
    `adlcv1.Event_TaskStarted{TaskStarted: …}`, …) exist as m3.md says. If any
    differs, stop and report.
-2. `evals.GoEnv` + its §9 line.
+2. `evals.GoEnv`.
 3. `workspace.go`: `runGit`, `gitRepo`, `removeUnder`, `dropGit`; `workspace_test.go` git tests.
 4. `history.go` + `history_test.go`.
 5. `budget.go` + `budget_test.go` (unit tests of `nestBudget`, `minPositive`).
@@ -997,7 +1036,7 @@ func kinds(t *testing.T, log *eventlog.Store, id string) []string
 
 `AgentBudget` in `newTestEnv` returns `&adlcv1.Budget{MaxSteps: 30}` for any
 ref and records the refs it was asked for. Workflow id in tests:
-`"t@1-20261114T101500Z-abcdef"`.
+`"t-v1-20261114T101500Z-abcdef"` (decision 14 format); child runs are `…-abcdef-1`, `-2`, ….
 
 ### `workspace_test.go`
 
@@ -1010,8 +1049,8 @@ ref and records the refs it was asked for. Workflow id in tests:
 | `TestRestoreRebuildsWorkspace` | commit A (file a), commit B (a changed, b added); scribble an extra file; `restore(A)` → workspace has exactly `a` with A's content; `rev-parse HEAD` is A |
 | `TestRemoveUnderRefusesOutside` | `removeUnder(base, base)`, `removeUnder(base, filepath.Dir(base))`, `removeUnder(base, base+"/../x")` → each the error, nothing removed |
 | `TestDropGitAtAnyDepth` | tree with `.git/config`, `sub/.git/HEAD`, `other/.git` (a *file*), `x/.GIT/` → all four gone, sorted list `[.git other/.git sub/.git x/.GIT]`; normal files untouched |
-| `TestStartWorkspaceHasCommittedFilesOnly` | repo with committed `a.txt` = `v1`, then uncommitted `a.txt` = `v2`, untracked `n.txt`; Start a one-task workflow (fake does nothing) → workspace `a.txt` = `v1`, no `n.txt`, no `.git`; `workflow_started.base_commit` = first commit of the engine git dir; its message's second paragraph is `source-commit: <repo HEAD>`; Stdout has the `committed files only` line |
-| `TestStartWithoutRepoInput` | workflow without inputs → empty workspace, base commit exists, message `base` only |
+| `TestStartWorkspaceHasCommittedFilesOnly` | repo with committed `a.txt` = `v1`, then uncommitted `a.txt` = `v2`, untracked `n.txt`; Start a one-task workflow (fake does nothing) → workspace `a.txt` = `v1`, no `n.txt`, no `.git`; `workflow_started.base_commit` = first commit of the engine git dir (message `base`); `workflow_started.source_commit` = the repo's HEAD; Stdout has the `committed files only` line |
+| `TestStartWithoutRepoInput` | workflow without inputs → empty workspace, base commit exists, `source_commit == ""` |
 | `TestStartRejectsBadRepo` | `repo` dir without `.git` → error `is not a git repository with a .git directory`; repo with `.git` but no commit → `has no commit`; both: no `<BaseDir>/<id>` left, log empty |
 | `TestStartValidatesInputs` | table: missing input, unknown input, file input pointing at a dir, `repo` declared as kind `file` → exact errors; nothing written |
 | `TestFileInputIsSnapshotted` | `issue` file input; Start with a task that fails with an `ERROR` (fake step `err`); change the file on disk; Resume → the second `TaskRun.Prompt` (rendering `{{ input "issue" }}`) has the original content |
@@ -1031,7 +1070,8 @@ Break the drop (skip `dropGit`) and see the first test fail; restore.
 |------|---------|
 | `TestProgressOfPairsStartedAndFinished` | hand-built events (two tasks interleaved, a retry, an ERROR) → records per task in order with the right `Finished`, `StartedAt`, `FinishedAt` |
 | `TestProgressBaseCommit` | base `B`, task x finished with `C1`, task y started → y's `BaseCommit == "C1"`; x's `== "B"` |
-| `TestFailedInRoundAndTries` | counts only PRODUCER CHECKS_FAILED/RUN_FAILED of the round; `tries` counts ERROR only |
+| `TestFailedInRound` | counts only PRODUCER CHECKS_FAILED/RUN_FAILED of the round (not ERROR, not AWAITING_APPROVAL, not other rounds) |
+| `TestNextRunNumber` | runs `-1` (parked), `-1` (continuation), `-2` (ERROR), export with `""` → 3 |
 | `TestLastCommitSkipsEmpty` | `task_finished` with `commit: ""` after one with `C1` → `C1` |
 
 ### `budget_test.go`
@@ -1060,20 +1100,20 @@ Break the drop (skip `dropGit`) and see the first test fail; restore.
 | Test | Asserts |
 |------|---------|
 | `TestNewValidatesOptions` | table: each required field missing → the exact error; defaults: `Image == evals.DefaultImage`, `Env` equals `evals.GoEnv()`, `BaseDir` absolute |
-| `TestChildRunID` | the four rows of the table in Design |
+| `TestChildRunID` | `childRunID("t-v1-20261114T101500Z-abcdef", 12) == "t-v1-20261114T101500Z-abcdef-12"` |
 | `TestCommitMessage` | `("x", 2, 0)` → `task x attempt 2`; `("x", 3, 2)` → `task x attempt 3 round 2` |
 | `TestStartRunsTasksInOrder` | tasks in file order `c` (depends on `a`), `a`, `b` (depends on `c`) → fake called for `a`, `c`, `b`; kinds exactly `workflow_started, task_started, task_finished, task_started, task_finished, task_started, task_finished, workflow_completed`; `workflow_completed.outcome == COMPLETED`; returned `State.Status == "completed"`, every `TaskState.Passed` |
-| `TestTaskStartedAndTaskRunFields` | `task_started{task_id, role PRODUCER, attempt 1, round 0, run_id "t-v1-20261114T101500Z-abcdef.a.a1"}`; `TaskRun.{RunID, WorkflowID, Task.ID, Role, AgentRef == Task.Agent, Prompt == rendered, Sandbox != nil, Handle.ID != ""}`; the run's sandbox spec has `RunID == run id`, `CPUs 2`, `MemoryBytes 4<<30`, `Network false` |
+| `TestTaskStartedAndTaskRunFields` | `task_started{task_id, role PRODUCER, attempt 1, round 0, run_id "t-v1-20261114T101500Z-abcdef-1", sandbox_id == TaskRun.Handle.ID}`; `TaskRun.{RunID, WorkflowID, Task.ID, Role, AgentRef == Task.Agent, Prompt == rendered, Sandbox != nil, Handle.ID != ""}`; the run's sandbox spec has `RunID == run id`, `CPUs 2`, `MemoryBytes 4<<30`, `Network false` |
 | `TestTaskFinishedHasCommit` | the commit in `task_finished` is the engine git dir's `HEAD`, message `task a attempt 1`, and its tree has the file the fake wrote |
 | `TestCopyOutReplacesWorkspace` | fake deletes `old.txt` and adds `new.txt` → workspace has `new.txt`, not `old.txt`; no `incoming/` or `previous/` left |
-| `TestChecksFailThenRetryPasses` | `attempts: 2`, check `test -f done.txt`; step 1 does nothing, step 2 creates `done.txt` → outcomes `CHECKS_FAILED`, `PASSED`; attempt 2's run id `….a2`; its prompt == rendered prompt + `fmt.Sprintf(retryNoteFormat, 1, <attempt 1 detail>)` (compare the whole string); commits `task t attempt 1`, `task t attempt 2`, the second's parent is the first; `COMPLETED` |
+| `TestChecksFailThenRetryPasses` | `attempts: 2`, check `test -f done.txt`; step 1 does nothing, step 2 creates `done.txt` → outcomes `CHECKS_FAILED`, `PASSED`; attempt 2's run id `…-2`; its prompt == rendered prompt + `fmt.Sprintf(retryNoteFormat, 1, <attempt 1 detail>)` (compare the whole string); commits `task t attempt 1`, `task t attempt 2`, the second's parent is the first; `COMPLETED` |
 | `TestChecksFailAfterAllAttempts` | `attempts: 2`, both fail → `workflow_completed{FAILED, "task t failed after 2 attempt(s): check 1 of 1 failed: test -f done.txt"}`; the next task never starts |
 | `TestRunFailedIsRetriedWithoutChecks` | step 1 `stop: BUDGET_EXHAUSTED` (stop detail from run_completed `max_steps 30 reached`), check `false` → attempt 1 `RUN_FAILED` with detail `run stopped: BUDGET_EXHAUSTED: max_steps 30 reached` and a commit (checks not run: otherwise it would be `CHECKS_FAILED`) |
-| `TestRunTaskErrorLeavesWorkflowRunning` | step 1 `err: errors.New("docker down")` → `Start` returns an error wrapping it; last event `task_finished{ERROR, "run task: docker down"}`; no `workflow_completed`; `Fold` status `running`; then `te.eng.Resume` with a good step → new run id `….a1.t2`, `attempt == 1`, `COMPLETED` |
+| `TestRunTaskErrorLeavesWorkflowRunning` | step 1 `err: errors.New("docker down")` → `Start` returns an error wrapping it; last event `task_finished{ERROR, "run task: docker down"}`; no `workflow_completed`; `Fold` status `running`; then `te.eng.Resume` with a good step → new run id `…-2`, `attempt == 1`, `COMPLETED` |
 | `TestRenderErrorFailsWorkflow` | prompt `{{ file "missing.md" }}` → `workflow_completed{FAILED}` with detail prefix `task t: render prompt: ` and containing `not found in the workspace`; no `task_started` |
-| `TestChildParksWorkflow` | step `stop: AWAITING_APPROVAL` → `Start` returns `nil` error and `State.Status == "awaiting_approval"`; last event `task_finished{AWAITING_APPROVAL, "sandbox <id>"}` with `commit == ""`; the sandbox `<id>` is not destroyed; Stdout has `waiting for approval of run …` |
+| `TestChildParksWorkflow` | step `stop: AWAITING_APPROVAL` → `Start` returns `nil` error and `State.Status == "awaiting_approval"`; last event `task_finished{AWAITING_APPROVAL}` with `sandbox_id` = the run's sandbox (same as `task_started.sandbox_id`) and `commit == ""`; that sandbox is not destroyed; Stdout has `waiting for approval of run …` |
 | `TestResumeWhileChildStillPausedParksAgain` | after the previous: `Resume` → no new events, status `awaiting_approval` |
-| `TestResumeAfterChildApprovedCollectsIt` | after the park: in the kept sandbox run `sh -c 'echo approved > b.txt'` (`te.host.Exec`), append `approval_resolved{a-1, approved}` and `run_completed{COMPLETED, "done"}` to the child run; `Resume` → appended `task_started` (same run id, attempt 1) and `task_finished{PASSED}` whose commit has `b.txt`; the sandbox is destroyed; `COMPLETED`; the fake was called once in total |
+| `TestResumeAfterChildApprovedCollectsIt` | after the park: in the kept sandbox run `sh -c 'echo approved > b.txt'` (`te.host.Exec`), append `approval_resolved{a-1, approved}` and `run_completed{COMPLETED, "done"}` to the child run; `Resume` → appended `task_started` (same run id `…-1`, attempt 1, same `sandbox_id`) and `task_finished{PASSED}` whose commit has `b.txt`; the sandbox is destroyed; `COMPLETED`; the fake was called once in total |
 | `TestResumeWhileChildRunningFails` | parked child whose log then gets `approval_resolved` only (running) → `Resume` error contains `is still running` |
 | `TestCancelledContextCancelsWorkflow` | step `hook` cancels the context passed to `Start` and returns state `CANCELLED` → `task_finished{ERROR, "cancelled"}`, `workflow_completed{CANCELLED, "cancelled"}`; `Start` returns the state and nil |
 | `TestSandboxesAreDestroyed` | after a completed two-task workflow with checks, the `sandboxtest.Host` dir has no `sb-*` directories |
@@ -1098,11 +1138,11 @@ to simulate a crash after event *n*, then `te.reopen(t, cut).Resume`.
 | `TestResumeUnknownWorkflow` | `ErrWorkflowNotFound` |
 | `TestResumeRefusesFinished` | completed workflow → `errors.Is(err, ErrWorkflowFinished)`, state returned with `Outcome == COMPLETED` |
 | `TestResumeRefusesChangedWorkflow` | `Resume` with a workflow whose `Digest` differs → `ErrWorkflowChanged`; nothing appended |
-| `TestResumeAfterCrashDuringTask` | two tasks; cut after task 2's `task_started` → appended exactly `task_finished{ERROR, interruptedDetail, run id ….b.a1}`, `task_started{attempt 1, run id ….b.a1.t2}`, `task_finished{PASSED}`, `workflow_completed{COMPLETED}`; task 1 not re-run |
+| `TestResumeAfterCrashDuringTask` | two tasks; cut after task 2's `task_started` → appended exactly `task_finished{ERROR, "interrupted", run id …-2}`, `task_started{attempt 1, run id …-3}`, `task_finished{PASSED}`, `workflow_completed{COMPLETED}`; task 1 not re-run |
 | `TestResumeAfterCrashBetweenTasks` | cut after task 1's `task_finished` → only task 2 runs, and its sandbox sees task 1's file (task 2's fake step is `test -f one.txt`) |
 | `TestResumeAfterCrashBeforeWorkflowCompleted` | cut only the last event → Resume appends `workflow_completed{COMPLETED}` and calls the fake 0 times |
 | `TestResumeRestoresWorkspaceToLastRecordedCommit` | cut after task 1's `task_started` (the full run had already committed task 1 and 2 and replaced the workspace); also create `incoming/junk` → before the redo, the workspace equals the base commit (fake step of the redo checks `test ! -e one.txt`), `incoming/` is gone, and the final commit's parent is the base commit (the orphan commits are unreachable) |
-| `TestResumeAfterCrashKeepsRetryNote` | `attempts: 2`; cut after attempt 2's `task_started` → the redo (`….a2.t2`) gets the same prompt as the original attempt 2 (retry note from attempt 1) |
+| `TestResumeAfterCrashKeepsRetryNote` | `attempts: 2`; cut after attempt 2's `task_started` → the redo (a new run id, attempt 2) gets the same prompt as the original attempt 2 (retry note from attempt 1) |
 
 ## Verify
 
@@ -1123,8 +1163,8 @@ make ci                                                                         
 - Review rounds and the critic (task W.4); gates and export (task W.5);
   `Options.Gates`, `Options.SkipExport`.
 - Parallel tasks, per-task workspaces, merges (m3.md decision 5).
-- Continuing an interrupted child run with `harness.Resume`; cleaning up the
-  orphaned run and sandbox of an interrupted attempt.
+- Continuing an interrupted child run with `harness.Resume`; marking the
+  orphaned child run itself as finished.
 - Any change to `events.proto`, `Fold` or `internal/harness`.
 
 ## Pitfalls
@@ -1160,14 +1200,15 @@ make ci                                                                         
 ## Done checklist
 
 - [ ] `New`, `Start`, `Resume`, `Workspace`, `TaskRun`, `Options` (without `Gates`/`SkipExport`) and the four errors exist exactly as in m3.md
-- [ ] Workspace from the committed tree of `repo`; file inputs snapshotted; base commit with `source-commit:`
+- [ ] Workspace from the committed tree of `repo`; file inputs snapshotted; `source_commit` recorded
 - [ ] All host git through `runGit` (own config only, hooks and fsmonitor off, identity `adlc <adlc@localhost>`)
 - [ ] Every `.git` dropped before commit; security tests pass and were seen failing
 - [ ] Budgets nested as specified; workflow budget checked before every run
 - [ ] Checks in a fresh sandbox, first failure stops, detail format exact
 - [ ] Retries with the exact retry note; `ERROR` does not use up an attempt
-- [ ] Parking keeps the sandbox; Resume collects the run once it finished
+- [ ] Child run ids `<workflow-id>-<n>` from the log; `sandbox_id` in `task_started` and in a parked `task_finished`
+- [ ] Parking keeps the sandbox; Resume continues with the same run id and collects the run once it finished
 - [ ] Resume closes an interrupted run, restores the workspace from the last recorded commit and continues
 - [ ] Hook block for W.4/W.5 present and marked
-- [ ] `evals.GoEnv` added, §9 line added; PR notes the shared files and the `evals` → `workflow` import rule
+- [ ] `evals.GoEnv` added; §12 subsection "W.3 — engine" appended; PR notes the shared files and the `evals` → `workflow` import rule
 - [ ] `make ci` passes
