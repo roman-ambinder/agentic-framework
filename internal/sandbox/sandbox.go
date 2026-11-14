@@ -145,7 +145,8 @@ type Suspender interface {
 // sandbox runs.
 type ImageResolver interface {
 	// ImageID returns the content ID ("sha256:<hex>") of the image the
-	// sandbox h was created from.
+	// sandbox h was created from. The ID must be usable as Spec.Image for
+	// the same backend: the eval runner creates the grading sandbox from it.
 	ImageID(ctx context.Context, h Handle) (string, error)
 }
 

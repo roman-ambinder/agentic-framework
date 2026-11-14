@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/roman-ambinder/agentic-framework/internal/sandbox"
 )
 
 // WriteTree writes root as an indented tree. Output is deterministic:
@@ -14,6 +16,7 @@ import (
 func WriteTree(w io.Writer, root *Span) error {
 	var sb strings.Builder
 	writeSpanLine(&sb, "", root, root)
+	writeImageLine(&sb, root)
 	for _, e := range root.Events {
 		writeEventLine(&sb, "  ", e, root)
 	}
@@ -40,6 +43,19 @@ func writeSpanLine(sb *strings.Builder, prefix string, s, root *Span) {
 	}
 	fmt.Fprintf(sb, "%s%s  [%s]  +%s  %s  %s\n",
 		prefix, s.Name, s.Status, formatDur(s.Start.Sub(root.Start)), dur, details(s))
+}
+
+// writeImageLine prints the sandbox image of a run, when it recorded one.
+func writeImageLine(sb *strings.Builder, root *Span) {
+	ref := attrString(root.Attrs, "adlc.image_ref")
+	if ref == "" {
+		return
+	}
+	if id := attrString(root.Attrs, "adlc.image_id"); id != "" {
+		fmt.Fprintf(sb, "  image: %s (%s)\n", ref, sandbox.ShortImageID(id))
+		return
+	}
+	fmt.Fprintf(sb, "  image: %s\n", ref)
 }
 
 func writeEventLine(sb *strings.Builder, eprefix string, e SpanEvent, root *Span) {

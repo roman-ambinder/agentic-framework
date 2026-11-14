@@ -78,6 +78,11 @@ func Build(events []*adlcv1.Event) (*Span, error) {
 		openModel: map[string]*Span{},
 		openTool:  map[string]*Span{},
 	}
+	if img := rs.GetSandboxImage(); img != nil {
+		b.root.Attrs = append(b.root.Attrs,
+			attribute.String("adlc.image_ref", img.GetRef()),
+			attribute.String("adlc.image_id", img.GetId()))
+	}
 	for _, ev := range events {
 		if err := b.apply(ev); err != nil {
 			return nil, err

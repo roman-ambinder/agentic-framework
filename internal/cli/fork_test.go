@@ -9,7 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
+	adlcv1 "github.com/roman-ambinder/agentic-framework/gen/go/adlc/v1"
 	"github.com/roman-ambinder/agentic-framework/internal/eventlog"
+	"github.com/roman-ambinder/agentic-framework/internal/sandbox/sandboxtest"
 )
 
 const forkScript = `{"turns": [{"text": "Forked answer", "finish": "end_turn", "usage": {"input_tokens": 5, "output_tokens": 2}}]}`
@@ -133,6 +137,31 @@ func TestForkSandboxIsFresh(t *testing.T) {
 	warn := "warning: the sandbox starts from the agent file's workspace; workspace changes of run o1 up to step 1 are not restored\n"
 	if !strings.Contains(out.String(), warn) || !strings.Contains(out.String(), "workspace: ") {
 		t.Fatalf("stdout = %q", out.String())
+	}
+}
+
+func TestForkRecordsSandboxImage(t *testing.T) {
+	agent2, script2, db := forkSetup(t, forkSandboxYAML)
+	b := &sandboxtest.Pausable{Workspace: workspaceTar(t)}
+	o := forkOptions{runOptions: runOptions{
+		agentPath: agent2, db: db, fakeScript: script2, runID: "f1", workspaceOut: filepath.Join(t.TempDir(), "out"),
+	}, atStep: 1}
+	err := forkAgentWith(context.Background(), o, "o1", &bytes.Buffer{}, func(context.Context) (runBackend, error) { return b, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := eventlog.Open(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	evs, err := store.Read(context.Background(), "f1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &adlcv1.SandboxImage{Ref: "golang:1.26", Id: "sha256:fake-golang:1.26"}
+	if got := evs[0].GetRunStarted().GetSandboxImage(); !proto.Equal(got, want) {
+		t.Errorf("sandbox_image = %v, want %v", got, want)
 	}
 }
 
