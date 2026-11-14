@@ -485,7 +485,7 @@ The key is the agent's `name:` (not its file name and not `name@version`).
 **Agent references** — `workflowAgentPath(w *workflow.Workflow, ref string) string`:
 `controlplane.ParseRef(ref)` succeeds → `ref` (a registry reference, resolved by
 `resolveAgentRef`); `filepath.IsAbs(ref)` → `filepath.Clean(ref)`; else
-`filepath.Join(w.Dir, ref)`. This is the same rule as W.1's `agentFile`.
+`filepath.Join(w.Dir, ref)` (m3.md "Agent references are resolved by the CLI").
 
 **Wiring** — one value carries what the engine's callbacks need:
 

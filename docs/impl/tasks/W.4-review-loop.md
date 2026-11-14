@@ -67,7 +67,7 @@ change: `TASK_ROLE_CRITIC`, `TASK_OUTCOME_CHANGES_REQUESTED` and
 | Counter | Meaning | Limit |
 |---------|---------|-------|
 | `round` | review round, 1-based on every run of a task with `review:` (0 without review, as in W.3) | `Review.MaxRounds` critic runs that said CHANGES |
-| `attempt` | producer attempt number, **per task** (m3.md: "1-based, per task"): it keeps counting across rounds and never resets | `Task.Attempts` producer runs that failed (`CHECKS_FAILED` or `RUN_FAILED`) **in the same round** |
+| `attempt` | producer attempt number, 1-based and **counting up across the task** (m3.md decision 8): it keeps counting across rounds and never resets | `Task.Attempts` producer runs that failed (`CHECKS_FAILED` or `RUN_FAILED`) **in the same round** |
 | run id | `<workflow-id>-<n>`, one per child run of the workflow (W.3, m3.md decision 14) | none |
 
 - Rounds are numbered from 1 on a task with review (0 without review), m3.md decision 9.

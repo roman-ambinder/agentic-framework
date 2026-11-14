@@ -16,8 +16,8 @@ other's code.
 
 ## Read first
 
-- `AGENTS.md` (rules 4–5); `docs/impl/m3.md` (decisions 2, 3, 5, 9, 10, 12; "Events"; "Fold")
-- `docs/impl/interfaces.md` §3, §10
+- `AGENTS.md` (rules 4–5); `docs/impl/m3.md` (decisions 2, 3, 5, 8, 9, 10, 12, 14; "Events"; "Sequencing rules the fold enforces"; "Fold")
+- `docs/impl/interfaces.md` §3, §10, §12 (created by W.1)
 - `contracts/proto/adlc/v1/events.proto`; `buf.yaml`, `buf.gen.yaml`; `Makefile` targets `proto`, `proto-lint`, `proto-check`, `proto-breaking`
 - `contracts/contracts_test.go` (`samplePayloads`, `TestEveryPayloadKindCovered`)
 - `internal/eventlog/store.go` (`Open`, `Option`, `Append`'s first-event check, `Kind`)
@@ -37,14 +37,14 @@ contracts/contracts_test.go            six samples in samplePayloads
 internal/eventlog/store.go             Store.firstKind, WithFirstKind, Open check, Append uses it
 internal/eventlog/store_test.go        tests below
 internal/eventlog/fold_test.go         TestEveryKindIsHandled skips the workflow kinds; one new test
-docs/impl/interfaces.md                §3 one paragraph, §10 rows
+docs/impl/interfaces.md                §3 one paragraph, §10 rows, a W.2 subsection at the end of §12
 ```
 
 Create:
 
 ```
 internal/workflow/doc.go               package comment (identical in W.1 and W.2, see below)
-internal/workflow/state.go             Status and its constants, TaskState, State, unexported bookkeeping types
+internal/workflow/state.go             Status and its constants, TaskState, State, unexported bookkeeping types (runKey, finishRec, taskTrack)
 internal/workflow/fold.go              ErrInvalidLog, Fold, apply and one function per payload
 internal/workflow/fold_test.go
 ```
@@ -87,13 +87,15 @@ message WorkflowStarted {
   uint32 workflow_version = 2;
   // Digest of the workflow file ("sha256:<hex>").
   string workflow_digest = 3;
-  // Inputs as given on the command line.
+  // Inputs; dir and file values made absolute by the CLI.
   map<string, string> inputs = 4;
   // The whole workflow's budget: only max_usd_micros, max_tokens and
   // max_wall_clock are used.
   Budget budget = 5;
   // Workspace commit before the first task.
   string base_commit = 6;
+  // HEAD of the repo input that seeded the workspace.
+  string source_commit = 7;
 }
 
 // TaskRole says which part of a task a run is.
@@ -111,7 +113,7 @@ enum TaskRole {
 message TaskStarted {
   string task_id = 1;
   TaskRole role = 2;
-  // 1-based, per task.
+  // 1-based, counts up across the task (docs/impl/m3.md decision 8).
   uint32 attempt = 3;
   // Review round, 1-based; 0 without review.
   uint32 round = 4;
@@ -119,10 +121,13 @@ message TaskStarted {
   string run_id = 5;
   // The run budget after nesting.
   Budget budget = 6;
+  // Sandbox the run uses; "" for export.
+  string sandbox_id = 7;
 }
 ```
 
-…and likewise `TaskOutcome` (values 0–6), `TaskFinished` (fields 1–8),
+…and likewise `TaskOutcome` (values 0–6), `TaskFinished` (fields 1–9, with
+`string sandbox_id = 9;` "set when the sandbox is kept (AWAITING_APPROVAL)"),
 `GateRequested` (1–2), `GateResolved` (1–4), `WorkflowOutcome` (values 0–6),
 `WorkflowCompleted` (1–2), each with a one-line message comment and the
 m3.md remarks as field comments. Do not renumber, rename or reorder
@@ -138,10 +143,10 @@ without them):
 "workflow_started": {Payload: &adlcv1.Event_WorkflowStarted{WorkflowStarted: &adlcv1.WorkflowStarted{
 	WorkflowName: "sdlc", WorkflowVersion: 1, WorkflowDigest: "sha256:abc",
 	Inputs: map[string]string{"repo": "/src", "issue": "/issue.md"},
-	Budget: &adlcv1.Budget{MaxUsdMicros: 2_000_000, MaxWallClock: durationpb.New(time.Hour)}, BaseCommit: "c0",
+	Budget: &adlcv1.Budget{MaxUsdMicros: 2_000_000, MaxWallClock: durationpb.New(time.Hour)}, BaseCommit: "c0", SourceCommit: "s0",
 }}},
-"task_started": {...TaskStarted{TaskId: "implement", Role: TASK_ROLE_PRODUCER, Attempt: 1, Round: 1, RunId: "r1", Budget: &adlcv1.Budget{MaxUsdMicros: 800_000}}},
-"task_finished": {...TaskFinished{TaskId: "implement", Role: TASK_ROLE_CRITIC, Attempt: 1, Round: 1, RunId: "r2", Outcome: TASK_OUTCOME_CHANGES_REQUESTED, Detail: "VERDICT: CHANGES", Commit: "c1"}},
+"task_started": {...TaskStarted{TaskId: "implement", Role: TASK_ROLE_PRODUCER, Attempt: 1, Round: 1, RunId: "r1", Budget: &adlcv1.Budget{MaxUsdMicros: 800_000}, SandboxId: "sb1"}},
+"task_finished": {...TaskFinished{TaskId: "implement", Role: TASK_ROLE_CRITIC, Attempt: 1, Round: 1, RunId: "r2", Outcome: TASK_OUTCOME_CHANGES_REQUESTED, Detail: "VERDICT: CHANGES", Commit: "c1", SandboxId: "sb2"}},
 "gate_requested": {...GateRequested{TaskId: "release", Summary: "export branch adlc/w1"}},
 "gate_resolved": {...GateResolved{TaskId: "release", Approved: true, ResolvedBy: "user:local", Comment: "ok"}},
 "workflow_completed": {...WorkflowCompleted{Outcome: WORKFLOW_OUTCOME_REVIEW_EXHAUSTED, Detail: "implement: 2 rounds"}},
@@ -216,32 +221,16 @@ package workflow
 
 ### Types (`state.go`)
 
-`TaskState` and `State` are exactly m3.md "Fold" (same fields, order and
-comments; a doc comment on each type). m3.md names no `Status` constants;
-use these:
+`Status`, its constants, `TaskState` and `State` are exactly m3.md "Fold"
+(same names, fields, order and comments; a doc comment on each exported
+name, e.g. `// StatusRunning: started, not parked, not completed.`).
 
-```go
-// Status is where a workflow is.
-type Status string
-
-// Workflow statuses.
-const (
-	// StatusRunning: started, not parked, not completed.
-	StatusRunning Status = "running"
-	// StatusAwaitingApproval: parked on a gate or on a child run that waits
-	// for a tool approval. The process exits; approve/resume continues.
-	StatusAwaitingApproval Status = "awaiting_approval"
-	// StatusCompleted: workflow_completed was written. No more events.
-	StatusCompleted Status = "completed"
-)
-```
-
-`State` gets three unexported fields after the exported ones (the fold's
+`State` gets four unexported fields after the exported ones (the fold's
 bookkeeping; never read outside `fold.go`):
 
 ```go
 	open   *runKey               // the task_started that has no task_finished yet
-	parked *runKey               // the run whose last task_finished was AWAITING_APPROVAL
+	parked *runKey               // the run whose task_finished was AWAITING_APPROVAL, until its continuation starts
 	track  map[string]*taskTrack // per task id
 	runIDs map[string]bool       // every child run id started
 ```
@@ -256,21 +245,16 @@ type runKey struct {
 	runID   string
 }
 
-// family says whether a task ran as an agent task or an export task.
-type family uint8
-
-const (
-	familyNone   family = iota // nothing started yet
-	familyAgent                // producer and critic runs
-	familyExport               // export runs
-)
+// finishRec is a task's latest task_finished.
+type finishRec struct {
+	key     runKey
+	outcome adlcv1.TaskOutcome
+}
 
 // taskTrack is what the fold needs about a task beyond TaskState.
 type taskTrack struct {
-	family        family
-	producerRound uint32          // round of the latest producer task_started
-	lastRole      adlcv1.TaskRole // role of the latest task_finished; UNSPECIFIED before the first
-	gateResolved  bool
+	last         *finishRec // nil before the task's first task_finished
+	gateResolved bool
 }
 ```
 
@@ -297,7 +281,7 @@ func Fold(events []*adlcv1.Event) (*State, error) {
 ```
 
 `(s *State) apply(ev) error`, numbered (short error texts as in `eventlog`; the
-wrapper above adds the prefix; enum values print with `%s`):
+wrapper above adds the prefix; enum values print with `%s`, e.g. `TASK_ROLE_PRODUCER`):
 
 1. `ev.GetSeq() != s.LastSeq+1` → `expected seq %d`.
 2. If `s.LastSeq == 0`: the payload must be `workflow_started`, else
@@ -313,9 +297,8 @@ wrapper above adds the prefix; enum values print with `%s`):
 
 Helper `(s *State) task(id string) (*TaskState, *taskTrack)`: returns the
 entries for `id`, creating `&TaskState{ID: id}` and `&taskTrack{}` and
-appending `id` to `TaskOrder` the first time. So `TaskOrder` is the order in
-which tasks first appear in the log (`task_started` or `gate_requested`; a
-gate always comes right before its task, so this is first-started order).
+appending `id` to `TaskOrder` the first time (first-appearance order:
+`task_started` or `gate_requested`).
 
 #### `workflow_started` — `s.started(ev, p)`
 
@@ -330,51 +313,56 @@ gate always comes right before its task, so this is first-started order).
 Then: `WorkflowID = ev.GetRunId()`, `Name`, `Version = int(version)`, `Digest`,
 `Inputs = maps.Clone(inputs)` (an empty map, never nil, when there are none),
 `Budget = proto.CloneOf(budget)` when it is set (nil otherwise), `BaseCommit`,
-`Status = StatusRunning`, `Outcome` UNSPECIFIED, `Tasks = map[string]*TaskState{}`,
-`track` and `runIDs` empty maps, `StartedAt = ev.GetTime().AsTime()`. `base_commit`
-may be empty.
+`SourceCommit`, `Status = StatusRunning`, `Outcome` UNSPECIFIED,
+`Tasks = map[string]*TaskState{}`, `track` and `runIDs` empty maps,
+`StartedAt = ev.GetTime().AsTime()`. `base_commit` and `source_commit` may be empty.
 
 #### `task_started` — `s.taskStarted(p)`
 
 `k := runKey{task_id, role, attempt, round, run_id}`. Checks in this order
-(`ts, tr := s.task(id)` right after the first four):
+(`ts, tr := s.task(id)` right after check 2):
 
 | # | Check | Error |
 |---|-------|-------|
 | 1 | `task_id == ""` | `task_started without a task id` |
 | 2 | role not PRODUCER, CRITIC or EXPORT | `task %q: task_started with role %s` |
-| 3 | `s.Status != StatusRunning` | `task %q started while the workflow is %s` |
-| 4 | `s.open != nil` | `task %q started while task %q is running` |
-| 5 | `ts.Passed` | `task %q already passed` |
-| 6 | `tr.gateResolved && !ts.GateApproved` | `task %q: its gate was rejected` |
-| 7 | role EXPORT and `run_id != ""` | `task %q: export has no run id, got %q` |
-| 8 | role PRODUCER/CRITIC and `run_id == ""` | `task %q: %s needs a run id` |
-| 9 | `s.runIDs[run_id]` (when not "") | `run %q started twice` |
-| 10 | EXPORT with `tr.family == familyAgent`, or PRODUCER/CRITIC with `familyExport` | `task %q mixes export with producer or critic runs` |
-| 11 | attempt: PRODUCER and EXPORT need `ts.Attempts+1`; CRITIC needs `ts.Attempts` (the producer attempt it reviews) | `task %q: %s attempt must be %d, got %d` |
-| 12 | the round rules below, in table order | as listed |
+| 3 | `s.parked != nil`: `k` must equal `*s.parked` — **a continuation**; go to "Effects of a continuation" and skip 4–10 | `task %q started while run %q of task %q waits for approval` (`k.taskID`, parked run id, parked task) |
+| 4 | `s.Status != StatusRunning` (a gate is pending) | `task %q started while the workflow is %s` |
+| 5 | `s.open != nil` | `task %q started while task %q is running` |
+| 6 | `ts.Passed` | `task %q already passed` |
+| 7 | `tr.gateResolved && !ts.GateApproved` | `task %q: its gate was rejected` |
+| 8 | role EXPORT and `run_id != ""`; role PRODUCER/CRITIC and `run_id == ""` | `task %q: export has no run id, got %q` / `task %q: %s needs a run id` |
+| 9 | `run_id != "" && s.runIDs[run_id]` | `run %q started twice` |
+| 10 | role, attempt and round are what the task's last finish allows (table below) | as listed |
 
-Round rules (`last` = `ts.Outcome` with `tr.lastRole`; "passed producer" = `lastRole == PRODUCER && Outcome == PASSED`):
+Allowed next start, by the task's latest `task_finished` (`tr.last`; `l` = its key):
 
-| Role | Allowed | Error |
-|------|---------|-------|
-| EXPORT | `round == 0` | `task %q: export round must be 0, got %d` |
-| PRODUCER, first (`ts.Attempts == 0`) | `round` is 0 (no review) or 1 | `task %q: first producer round must be 0 or 1, got %d` |
-| PRODUCER, task without review (`tr.producerRound == 0`) | `round == 0` | `task %q: round %d in a task without review` |
-| PRODUCER, reviewed, `round == producerRound` | the last finish is neither a passed producer nor a critic with CHANGES_REQUESTED | `task %q: producer cannot repeat round %d after %s %s` (lastRole, Outcome) |
-| PRODUCER, reviewed, `round == producerRound+1` | the last finish is a critic with CHANGES_REQUESTED | `task %q: round %d needs a critic's CHANGES_REQUESTED in round %d` |
-| PRODUCER, reviewed, any other round | never | `task %q: producer round %d does not follow round %d` |
-| CRITIC (checked first) | the last finish is a passed producer, or a critic with RUN_FAILED or ERROR (critic retry) | `task %q: critic must follow a passed producer` |
-| CRITIC | `round >= 1 && round == tr.producerRound` | `task %q: critic round must be %d, got %d` (`tr.producerRound`) |
+| Latest finish | The next start must be | Error |
+|---------------|------------------------|-------|
+| none (first start) | PRODUCER attempt 1, round 0 (no review) or 1; or EXPORT attempt 1, round 0 | `task %q: first start must be producer attempt 1 round 0 or 1, or export attempt 1 round 0, got %s attempt %d round %d` |
+| any role, ERROR | same role, `l.attempt`, `l.round`, new run id (check 9) — m3.md decision 8: an ERROR does not use up an attempt | `task %q: next start must be %s attempt %d round %d, got %s attempt %d round %d` |
+| PRODUCER, CHECKS_FAILED or RUN_FAILED | PRODUCER, `l.attempt+1`, `l.round` | same text |
+| PRODUCER, PASSED, `l.round >= 1` | CRITIC, `l.attempt` (the producer attempt it reviews), `l.round` | same text |
+| CRITIC, CHANGES_REQUESTED | PRODUCER, `l.attempt+1`, `l.round+1` | same text |
+| CRITIC, RUN_FAILED | nothing (the workflow ends FAILED) | `task %q: nothing can start after a critic RUN_FAILED` |
 
-Effects: `s.open = &k`; `ts.Running = true`; `ts.Outcome = UNSPECIFIED`;
-PRODUCER and EXPORT: `ts.Attempts++`; `ts.Rounds = max(ts.Rounds, int(round))`;
-PRODUCER: `tr.producerRound = round`, `ts.LastRunID = run_id`; `run_id != ""`:
-append to `ts.RunIDs`, `s.runIDs[run_id] = true`; `tr.family` set (export or agent).
+(PASSED in round 0, critic PASSED and export PASSED pass the task: check 6.
+AWAITING_APPROVAL is handled by check 3. The fold does not know `attempts:` or
+`max_rounds:`; the engine stops in time.)
 
-`LastRunID` is the run of the latest **producer** start (m3.md: "RunState.Result
-of LastRunID of the producer"), so `{{ result "task" }}` reads the producer's
-final message even when a critic ran after it. Critic runs appear in `RunIDs` only.
+Effects of a new start: `s.open = &k`; `ts.Running = true`; `ts.Outcome = UNSPECIFIED`;
+PRODUCER: `ts.Attempts = max(ts.Attempts, int(attempt))`, `ts.LastRunID = run_id`;
+any role: `ts.Rounds = max(ts.Rounds, int(round))`; `run_id != ""`: append to
+`ts.RunIDs`, `s.runIDs[run_id] = true`.
+
+Effects of a continuation: `s.parked = nil`; `s.open = &k`;
+`s.Status = StatusRunning`; `ts.Running = true`; `ts.Outcome = UNSPECIFIED`.
+`RunIDs`, `Attempts`, `Rounds`, `LastRunID` and `SandboxID` do not change (the
+run id is already listed; the sandbox id is cleared by the next `task_finished`).
+Budget and sandbox id of a continuation's `task_started` are not checked.
+
+`LastRunID` is the run of the latest producer start, so `{{ result "task" }}`
+reads the producer's final message even after a critic ran.
 
 #### `task_finished` — `s.taskFinished(p)`
 
@@ -383,8 +371,9 @@ final message even when a critic ran after it. Critic runs appear in `RunIDs` on
 | # | Check | Error |
 |---|-------|-------|
 | 1 | `o == UNSPECIFIED` | `task_finished for %q without an outcome` |
-| 2 | `s.parked != nil && k == *s.parked` → this resolves the parked run; else `s.open != nil && k == *s.open` → this ends the open run; else | `task_finished for %q (%s attempt %d round %d run %q) matches no running task` |
+| 2 | `s.open != nil && k == *s.open` | `task_finished for %q (%s attempt %d round %d run %q) matches no running task` |
 | 3 | `o` allowed for the role (table below) | `task %q: outcome %s is not allowed for %s` |
+| 4 | `o == AWAITING_APPROVAL` and `sandbox_id == ""` | `task %q: AWAITING_APPROVAL without a sandbox id` |
 
 | Role | Allowed outcomes |
 |------|------------------|
@@ -392,20 +381,19 @@ final message even when a critic ran after it. Critic runs appear in `RunIDs` on
 | CRITIC | PASSED (approved), CHANGES_REQUESTED, RUN_FAILED, AWAITING_APPROVAL, ERROR |
 | EXPORT | PASSED, ERROR |
 
-Effects, in this order: if it resolved the parked run: `s.parked = nil`,
-`s.Status = StatusRunning`; else `s.open = nil`. Then `ts.Running = false`;
-`ts.Outcome = o`; `commit != ""` → `ts.Commit = commit` (an empty commit keeps
-the previous one); `tr.lastRole = role`; `ts.Passed = true` when
-(PRODUCER, PASSED, `round == 0`) or (CRITIC, PASSED) or (EXPORT, PASSED). A
-producer that passes in a review round (`round >= 1`) does **not** pass the
-task: its critic must approve. If `o == AWAITING_APPROVAL`: `s.parked = &k`,
-`s.Status = StatusAwaitingApproval`.
+Effects: `s.open = nil`; `ts.Running = false`; `ts.Outcome = o`;
+`commit != ""` → `ts.Commit = commit` (an empty commit keeps the previous one);
+`ts.SandboxID = sandbox_id` if `o == AWAITING_APPROVAL`, else `""`;
+`tr.last = &finishRec{k, o}`; `ts.Passed = true` when (PRODUCER, PASSED,
+`round == 0`) or (CRITIC, PASSED) or (EXPORT, PASSED) — a producer that passes
+in a review round does **not** pass the task, its critic must approve. If
+`o == AWAITING_APPROVAL`: `s.parked = &k`, `s.Status = StatusAwaitingApproval`.
 
-How a parked child run continues (m3.md decision 10): the engine stops; `adlc
-approve` finishes the child run in the run log; `adlc workflow resume` reads
-the child's final state and writes a **second** `task_finished` with the
-same task, role, attempt, round and run id and the real outcome (which may be
-AWAITING_APPROVAL again). No `task_started` is written for it.
+How a parked child run continues (m3.md decision 10): `task_finished{AWAITING_APPROVAL,
+sandbox_id}`; the process exits; `adlc approve` finishes the child run in the
+run log; `adlc workflow resume` writes `task_started` with the **same** task,
+role, attempt, round and run id (the continuation), then that run's
+`task_finished` with its real outcome (which may be AWAITING_APPROVAL again).
 
 #### `gate_requested` — `s.gateRequested(p)`
 
@@ -415,7 +403,7 @@ AWAITING_APPROVAL again). No `task_started` is written for it.
 | `s.Status != StatusRunning` | `gate for task %q requested while the workflow is %s` |
 | `s.open != nil` | `gate for task %q requested while task %q is running` |
 | `ts.GatePending \|\| tr.gateResolved` | `gate for task %q requested twice` |
-| `ts.Attempts > 0` | `gate for task %q requested after the task started` |
+| `tr.last != nil \|\| len(ts.RunIDs) > 0 \|\| ts.Attempts > 0` (the task has started) | `gate for task %q requested after the task started` |
 
 Effects: `ts.GatePending = true`; `s.Status = StatusAwaitingApproval`.
 
@@ -425,7 +413,7 @@ The task must exist with `GatePending`, else `no pending gate for task %q`
 (do not create a task entry for it). Effects: `GatePending = false`,
 `GateApproved = approved`, `tr.gateResolved = true`, `s.Status = StatusRunning`.
 A rejected gate leaves the workflow running until the engine writes
-`workflow_completed{REJECTED}`; the task can no longer start (rule 6).
+`workflow_completed{REJECTED}`; the task can no longer start (check 7).
 
 #### `workflow_completed` — `s.completed(p)`
 
@@ -438,25 +426,28 @@ A rejected gate leaves the workflow running until the engine writes
 
 Effects: `Status = StatusCompleted`, `Outcome`, `Detail`. Every other
 outcome is allowed in `running` or `awaiting_approval` (for example
-CANCELLED while a gate is pending; `GatePending` then stays true).
+CANCELLED while a gate is pending or a run is parked; `GatePending` and
+`SandboxID` then stay as they were).
 
 ### Summary of valid sequences (for review; the tables above are the rules)
 
+This is m3.md's "Sequencing rules the fold enforces":
+
 ```
 workflow_started
-  ( gate_requested(T) gate_resolved(T) )?            only before T's first task_started
-  task_started(T,k) task_finished(T,k)               one run at a time, any number
-  task_finished(T,k,AWAITING_APPROVAL) ... task_finished(T,k,final)   the parked run continues
-workflow_completed                                    nothing after it
+  ( gate_requested(T) gate_resolved(T, approved) )?      only before T's first start, at most once
+  task_started(T,k) task_finished(T,k,o)                 one open at a time
+    o = AWAITING_APPROVAL → next: task_started(T,k)      continuation, same run id
+    o = ERROR             → next for T: same role/attempt/round, new run id
+    producer CHECKS_FAILED/RUN_FAILED → producer attempt+1, same round
+    producer PASSED, round ≥ 1        → critic, same attempt and round
+    critic CHANGES_REQUESTED          → producer attempt+1, round+1
+workflow_completed                                       nothing after it
 ```
 
-Per task without review: producer attempts 1, 2, … in round 0 until one
-PASSED. With review: producer round 1 attempts until PASSED, critic same round
-(retried after RUN_FAILED/ERROR) until PASSED (task passed) or
-CHANGES_REQUESTED (next producer in round + 1). Export: attempts 1, 2, … in
-round 0, no run id. A crash leaves at most one `task_started` open; resume
-must either continue that child run and then write its `task_finished`, or
-write `task_finished{ERROR}` for it before starting anything else.
+Crash recovery (m3.md decision 3) needs nothing special: resume writes
+`task_finished{ERROR, "interrupted"}` for the open run, then the same attempt
+starts again with a new run id.
 
 ### `interfaces.md` text
 
@@ -479,7 +470,30 @@ unchanged; workflow logs are folded by `workflow.Fold`.
 | W.2 | `Event` payload oneof | `GateRequested gate_requested` | 26 |
 | W.2 | `Event` payload oneof | `GateResolved gate_resolved` | 27 |
 | W.2 | `Event` payload oneof | `WorkflowCompleted workflow_completed` | 28 |
-| W.2 | new enums | `TaskRole`, `TaskOutcome`, `WorkflowOutcome` (docs/impl/m3.md) | — |
+| W.2 | new messages and enums | `WorkflowStarted` (1–7), `TaskStarted` (1–7), `TaskFinished` (1–9), `GateRequested`, `GateResolved`, `WorkflowCompleted`; `TaskRole`, `TaskOutcome`, `WorkflowOutcome` (docs/impl/m3.md) | — |
+```
+
+§12: append this subsection at the end of §12. W.1 creates §12; if W.1 is not
+on `main` yet, also create its heading and first paragraph with exactly
+W.1's text (below), so whichever merges second keeps one heading and puts
+W.1's subsection before this one:
+
+```markdown
+## §12 M3 additions (briefs W.1–W.6)
+
+Shared decisions and the exact API: `docs/impl/m3.md` ("The API"). W.1
+creates this section; W.2–W.6 each append their own subsection below.
+```
+
+```markdown
+### Workflow events and fold (W.2)
+
+Payloads 23–28 (§10); `eventlog.WithFirstKind` (§3); `Status`
+(`StatusRunning`, `StatusAwaitingApproval`, `StatusCompleted`), `TaskState`,
+`State`, `Fold`, `ErrInvalidLog`. The fold enforces m3.md's sequencing rules:
+one run open at a time; a continuation (same run id) after
+`AWAITING_APPROVAL`; the same attempt with a new run id after `ERROR`; critic
+attempt = the producer attempt it reviews; gates before a task's first start.
 ```
 
 ## Steps
@@ -492,8 +506,8 @@ unchanged; workflow logs are folded by `workflow.Fold`.
 6. `doc.go`, `state.go`.
 7. `fold.go` with the envelope rules and `workflow_started`; `TestFoldStartedOnly` and the envelope rows of `TestFoldInvalidLogs`; pass.
 8. `task_started` / `task_finished`; their tests; then gates; then `workflow_completed`; pass after each.
-9. `interfaces.md` §3 and §10.
-10. Break each rule once on purpose (e.g. drop check 11 of `task_started`, or set `Passed` for a reviewed producer), see a test fail, restore.
+9. `interfaces.md` §3, §10 and §12.
+10. Break each rule once on purpose (e.g. accept any attempt in check 10 of `task_started`, append a continuation to `RunIDs`, or set `Passed` for a reviewed producer), see a test fail, restore.
 11. `make fmt && make ci`; `make proto-breaking AGAINST='.git#branch=main'`.
 
 ## Tests
@@ -525,37 +539,41 @@ Helpers (the only package-level identifiers in this file besides `Test...`
 functions, so that W.1's test files never collide with them): `ft0`
 (`time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)`); `evKey` (struct `id`, `role`, `attempt`, `round`, `run`);
 `evProd(id, attempt, round, run)`, `evCritic(id, attempt, round, run)`, `evExport(id, attempt) evKey`;
-`evStarted()` (`WorkflowStarted{sdlc, 1, "sha256:d", {repo: /r, issue: /i}, Budget{MaxUsdMicros: 2_000_000}, "c0"}`);
-`evStart(k)`, `evFinish(k, outcome, commit)`, `evGate(id)`, `evResolve(id, approved)`, `evEnd(outcome, detail)`;
+`evStarted()` (`WorkflowStarted{sdlc, 1, "sha256:d", {repo: /r, issue: /i}, Budget{MaxUsdMicros: 2_000_000}, "c0", "s0"}`);
+`evStart(k)`, `evFinish(k, outcome, commit)`, `evPark(k, sandboxID)` (finish AWAITING_APPROVAL with that sandbox id),
+`evGate(id)`, `evResolve(id, approved)`, `evEnd(outcome, detail)`;
 `evLog(payloads ...*adlcv1.Event)` (prepends `evStarted()`, sets `RunId "w1"`, seq from 1, time `ft0 + i s`, like `eventlog.logOf`);
 `foldOK(t, evs) *State`; `foldBad(t, evs, sub string)` (asserts `errors.Is(err, ErrInvalidLog)` and that the text contains `sub`).
 Compare `TaskState` values with `reflect.DeepEqual`; compare `State` field by field (it has unexported fields).
+Below, `P(a,r,run)` = `evProd("t", a, r, run)`, `C(...)` = `evCritic("t", ...)`, `E(a)` = `evExport("t", a)`; `S(k)`/`F(k,o)` = start/finish.
 
 | Test | Asserts |
 |------|---------|
-| `TestFoldStartedOnly` | `WorkflowID "w1"`, `Name "sdlc"`, `Version 1`, `Digest "sha256:d"`, `Inputs` equal, `proto.Equal(Budget, …)`, `BaseCommit "c0"`, `Status running`, `Outcome` UNSPECIFIED, `Tasks` empty and non-nil, `TaskOrder` nil, `StartedAt == LastEventAt == ft0`, `LastSeq 1` |
+| `TestFoldStartedOnly` | `WorkflowID "w1"`, `Name "sdlc"`, `Version 1`, `Digest "sha256:d"`, `Inputs` equal, `proto.Equal(Budget, …)`, `BaseCommit "c0"`, `SourceCommit "s0"`, `Status running`, `Outcome` UNSPECIFIED, `Tasks` empty and non-nil, `TaskOrder` nil, `StartedAt == LastEventAt == ft0`, `LastSeq 1` |
 | `TestFoldInputsAreCopied` | changing the event's `inputs` map after `Fold` does not change `State.Inputs`; no inputs → empty non-nil map |
-| `TestFoldTaskRunning` | `evStart(prod spec 1 0 r1)` → `TaskState{ID spec, Attempts 1, RunIDs [r1], LastRunID r1, Running true}`, `TaskOrder [spec]` |
-| `TestFoldTaskPasses` | + `evFinish(…, PASSED, "c1")` → `{ID spec, Attempts 1, RunIDs [r1], LastRunID r1, Outcome PASSED, Passed true, Commit c1}`, Status running |
-| `TestFoldRetryAfterChecksFailed` | attempt 1 CHECKS_FAILED `c1`, attempt 2 (r2) PASSED `c2` → Attempts 2, RunIDs [r1 r2], LastRunID r2, Commit c2, Passed |
-| `TestFoldEmptyCommitKeepsPrevious` | attempt 1 CHECKS_FAILED `c1`, attempt 2 ERROR `""` → Commit `c1`, Outcome ERROR, Passed false |
-| `TestFoldReviewLoop` | prod(impl,1,1,r1) PASSED c1 → Passed false, Outcome PASSED, Rounds 1; critic(impl,1,1,r2) CHANGES; prod(impl,2,2,r3) PASSED c2; critic(impl,2,2,r4) PASSED → `{Attempts 2, Rounds 2, RunIDs [r1 r2 r3 r4], LastRunID r3, Outcome PASSED, Passed true, Commit c2}` |
-| `TestFoldProducerRetryInsideRound` | prod(1,1) CHECKS_FAILED, prod(2,1) PASSED, critic(2,1) PASSED → Passed |
-| `TestFoldCriticRetryAfterError` | prod(1,1) PASSED, critic(1,1,r2) ERROR, critic(1,1,r3) PASSED → Passed, Attempts 1 |
-| `TestFoldGateApproved` | `evGate(release)` → Status awaiting_approval, `GatePending`, TaskOrder [release]; `evResolve(release, true)` → running, `GateApproved`; export(release,1) PASSED → `{ID release, Attempts 1, Outcome PASSED, Passed true, GateApproved true}` (RunIDs nil, LastRunID ""); `evEnd(COMPLETED, "")` → Status completed, Outcome COMPLETED |
+| `TestFoldTaskRunning` | `S(P(1,0,r1))` → `TaskState{ID t, Attempts 1, RunIDs [r1], LastRunID r1, Running true}`, `TaskOrder [t]` |
+| `TestFoldTaskPasses` | + `F(…, PASSED, "c1")` → `{ID t, Attempts 1, RunIDs [r1], LastRunID r1, Outcome PASSED, Passed true, Commit c1}`, Status running |
+| `TestFoldRetryAfterChecksFailed` | `P(1,0,r1)` CHECKS_FAILED `c1`, `P(2,0,r2)` PASSED `c2` → Attempts 2, RunIDs [r1 r2], LastRunID r2, Commit c2, Passed |
+| `TestFoldErrorRestartsSameAttempt` | `P(1,0,r1)` ERROR `""`, `P(1,0,r2)` CHECKS_FAILED `c1`, `P(2,0,r3)` ERROR `""` → Attempts 2, RunIDs [r1 r2 r3], LastRunID r3, Commit `c1` (empty commit keeps it), Outcome ERROR, Passed false |
+| `TestFoldReviewLoop` | `P(1,1,r1)` PASSED c1 → Passed false, Outcome PASSED, Rounds 1; `C(1,1,r2)` CHANGES; `P(2,2,r3)` PASSED c2; `C(2,2,r4)` PASSED → `{Attempts 2, Rounds 2, RunIDs [r1 r2 r3 r4], LastRunID r3, Outcome PASSED, Passed true, Commit c2}` |
+| `TestFoldProducerRetryInsideRound` | `P(1,1)` CHECKS_FAILED, `P(2,1)` PASSED, `C(2,1)` PASSED → Passed |
+| `TestFoldCriticRetryAfterError` | `P(1,1,r1)` PASSED, `C(1,1,r2)` ERROR, `C(1,1,r3)` PASSED → Passed, Attempts 1, RunIDs [r1 r2 r3] |
+| `TestFoldGateApproved` | `evGate("t")` → Status awaiting_approval, `GatePending`, TaskOrder [t]; `evResolve("t", true)` → running, `GateApproved`; `E(1)` PASSED → `{ID t, Outcome PASSED, Passed true, GateApproved true}` (Attempts 0, RunIDs nil, LastRunID ""); `evEnd(COMPLETED, "")` → Status completed, Outcome COMPLETED |
+| `TestFoldExportRetryAfterError` | `E(1)` ERROR, `E(1)` PASSED → Passed |
 | `TestFoldGateRejected` | gate, resolve(false), end(REJECTED, "no") → GateApproved false, GatePending false, Status completed, Outcome REJECTED, Detail `no` |
-| `TestFoldChildRunParks` | prod(spec,1,0,r1) AWAITING_APPROVAL → Status awaiting_approval, Running false, Outcome AWAITING_APPROVAL; second finish, same key, PASSED c1 → Status running, Passed, RunIDs [r1] |
-| `TestFoldParkedTwice` | AWAITING_APPROVAL, AWAITING_APPROVAL, PASSED for the same key → valid, Passed |
-| `TestFoldCompletedOutcomes` | table: FAILED after a CHECKS_FAILED task; BUDGET_EXHAUSTED with no task; CANCELLED while a gate is pending (GatePending stays true); CANCELLED while a run is parked → each: Status completed, Outcome and Detail as given |
-| `TestFoldSkipsUnknownKinds` | `evLog(&adlcv1.Event{}, evStart(prod spec 1 0 r1))` → valid, `LastSeq 3`, task running |
+| `TestFoldChildRunParksAndContinues` | `S(P(1,0,r1))`, `evPark(P(1,0,r1), "sb1")` → Status awaiting_approval, Running false, Outcome AWAITING_APPROVAL, SandboxID `sb1`; `S(P(1,0,r1))` again (continuation) → Status running, Running true, SandboxID `sb1`, RunIDs [r1], Attempts 1; `F(P(1,0,r1), PASSED, "c1")` → SandboxID "", Passed, RunIDs [r1] |
+| `TestFoldCriticParksAndContinues` | `P(1,1,r1)` PASSED, `S(C(1,1,r2))`, `evPark(C(1,1,r2), "sb2")`, `S(C(1,1,r2))`, `F(C(1,1,r2), CHANGES_REQUESTED)` → RunIDs [r1 r2]; `S(P(2,2,r3))` is valid |
+| `TestFoldParkedTwice` | start, park, continuation, park, continuation, PASSED, all with key `P(1,0,r1)` → valid, Passed |
+| `TestFoldCompletedOutcomes` | table: FAILED after a CHECKS_FAILED task; BUDGET_EXHAUSTED with no task; CANCELLED while a gate is pending (GatePending stays true); CANCELLED while a run is parked (SandboxID stays) → each: Status completed, Outcome and Detail as given |
+| `TestFoldSkipsUnknownKinds` | `evLog(&adlcv1.Event{}, S(P(1,0,r1)))` → valid, `LastSeq 3`, task running |
 | `TestFoldRejectsRunEvents` | for every payload kind of the schema except the six workflow kinds, built with protoreflect (`m.Set(fd, m.NewField(fd))`): `evLog(that event)` → `foldBad(…, "is not a workflow event")` |
-| `TestFoldErrorNamesWorkflowAndSeq` | `evLog(evFinish(prod spec 1 0 r1, PASSED, ""))` → text starts with `workflow: invalid log: workflow "w1" seq 2: ` |
+| `TestFoldErrorNamesWorkflowAndSeq` | `evLog(F(P(1,0,r1), PASSED, ""))` → text starts with `workflow: invalid log: workflow "w1" seq 2: ` |
 | `TestFoldInvalidLogs` | table below; each row `foldBad(t, events, sub)` |
 
-`TestFoldInvalidLogs` rows (`P(a,r,run)` = `evProd("t", a, r, run)`, `C(...)` = critic, `E(a)` = export of task `t`; `S(k)`/`F(k,o)` = start/finish):
+`TestFoldInvalidLogs` rows (events after `workflow_started` unless said otherwise):
 
-| Row | Events after `workflow_started` (or the whole log) | Error contains |
-|-----|-----------------------------------------------------|----------------|
+| Row | Events | Error contains |
+|-----|--------|----------------|
 | empty | `nil` | `no events` |
 | first not workflow_started | `evLog(S(P(1,0,r1)))[1:]` renumbered from 1 | `first event must be workflow_started` |
 | seq gap | two events, the first removed | `expected seq 2` |
@@ -565,34 +583,39 @@ Compare `TaskState` values with `reflect.DeepEqual`; compare `State` field by fi
 | budget with steps / tool calls | `Budget{MaxSteps: 1}`, `Budget{MaxToolCalls: 1}` | `may only set` |
 | event after completed | `evEnd(FAILED,"")`, `S(P(1,0,r1))` | `workflow already completed` |
 | no task id / no role | `S` with `""` id; `S` with role UNSPECIFIED | `without a task id` / `with role TASK_ROLE_UNSPECIFIED` |
-| two running | `S(P(1,0,r1))`, `S` of task `u` | `started while task "t" is running` |
-| start after pass | `S(P(1,0,r1))`, `F(…,PASSED)`, `S(P(2,0,r2))` | `already passed` |
+| two running | `S(P(1,0,r1))`, `S(evProd("u",1,0,"r2"))` | `started while task "t" is running` |
+| start after pass | `S/F(P(1,0,r1),PASSED)`, `S(P(2,0,r2))` | `already passed` |
 | start while gate pending | `evGate("t")`, `S(P(1,0,r1))` | `started while the workflow is awaiting_approval` |
 | start after rejected gate | gate, resolve(false), `S(P(1,0,r1))` | `its gate was rejected` |
-| start while parked | `S(P(1,0,r1))`, `F(…,AWAITING_APPROVAL)`, `S` of task `u` | `while the workflow is awaiting_approval` |
-| export with run id / producer without | `S(E-with-run "r1")`; `S(P(1,0,""))` | `export has no run id` / `needs a run id` |
-| run id reused | task `t` r1 CHECKS_FAILED, `S(P(2,0,r1))` | `run "r1" started twice` |
-| export after producer / producer after export | `S/F(P(1,0,r1),RUN_FAILED)`, `S(E(2))`; and the reverse | `mixes export with producer or critic runs` |
-| attempt skips / repeats | `S(P(2,0,r1))`; `S/F(P(1,0,r1),ERROR)`, `S(P(1,0,r2))` | `attempt must be 1, got 2` / `must be 2, got 1` |
-| critic attempt | `P(1,1)` PASSED, `S(C(2,1,r2))` | `TASK_ROLE_CRITIC attempt must be 1, got 2` |
-| first round 2 | `S(P(1,2,r1))` | `first producer round must be 0 or 1` |
-| unreviewed then round 1 | `P(1,0)` ERROR, `S(P(2,1,r2))` | `round 1 in a task without review` |
-| repeat round after passed producer | `P(1,1)` PASSED, `S(P(2,1,r2))` | `cannot repeat round 1` |
-| repeat round after CHANGES | `P(1,1)` PASSED, `C(1,1)` CHANGES, `S(P(2,1,r3))` | `cannot repeat round 1` |
-| next round without CHANGES | `P(1,1)` PASSED, `C(1,1)` ERROR, `S(P(2,2,r3))` | `needs a critic's CHANGES_REQUESTED` |
-| round skipped | `P(1,1)` PASSED, `C(1,1)` CHANGES, `S(P(2,3,r3))` | `does not follow round 1` |
-| critic first | `S(evCritic("t", 0, 1, "r1"))` (attempt 0 equals `Attempts`, so the critic rule fires) | `critic must follow a passed producer` |
-| critic round 0 | `P(1,1)` PASSED, `S(C(1,0,r2))` | `critic round must be 1, got 0` |
-| critic after failed producer | `P(1,1)` CHECKS_FAILED, `S(C(1,1,r2))` | `critic must follow a passed producer` |
-| critic after CHANGES | `P(1,1)` PASSED, `C(1,1)` CHANGES, `S(C(1,1,r3))` | `critic must follow a passed producer` |
-| export round 1 | `S(E(1) with round 1)` | `export round must be 0` |
+| other task while parked | `S(P(1,0,r1))`, `evPark(…,"sb")`, `S(evProd("u",1,0,"r2"))` | `waits for approval` |
+| parked: new run instead of continuation | `S(P(1,0,r1))`, `evPark(…,"sb")`, `S(P(1,0,r2))` | `waits for approval` |
+| parked: next attempt instead of continuation | `S(P(1,0,r1))`, `evPark(…,"sb")`, `S(P(2,0,r2))` | `waits for approval` |
+| finish while parked | `S(P(1,0,r1))`, `evPark(…,"sb")`, `F(P(1,0,r1),PASSED)` | `matches no running task` |
+| park without sandbox id | `S(P(1,0,r1))`, `evPark(…,"")` | `AWAITING_APPROVAL without a sandbox id` |
+| export with run id / producer without | `S` of `E(1)` with run id `r1`; `S(P(1,0,""))` | `export has no run id` / `needs a run id` |
+| run id reused | `S/F(P(1,0,r1),CHECKS_FAILED)`, `S(P(2,0,r1))` | `run "r1" started twice` |
+| ERROR restart with the same run id | `S/F(P(1,0,r1),ERROR)`, `S(P(1,0,r1))` | `run "r1" started twice` |
+| first start wrong | `S(P(2,0,r1))`; `S(P(1,2,r1))`; `S(C(1,1,r1))`; `S` of `E(1)` with round 1 (four rows) | `first start must be` |
+| next attempt after ERROR | `S/F(P(1,0,r1),ERROR)`, `S(P(2,0,r2))` | `next start must be TASK_ROLE_PRODUCER attempt 1 round 0, got TASK_ROLE_PRODUCER attempt 2 round 0` |
+| same attempt after CHECKS_FAILED | `S/F(P(1,0,r1),CHECKS_FAILED)`, `S(P(1,0,r2))` | `next start must be TASK_ROLE_PRODUCER attempt 2 round 0` |
+| round change inside a round | `S/F(P(1,0,r1),CHECKS_FAILED)`, `S(P(2,1,r2))` | `next start must be TASK_ROLE_PRODUCER attempt 2 round 0` |
+| producer instead of critic | `S/F(P(1,1,r1),PASSED)`, `S(P(2,1,r2))` | `next start must be TASK_ROLE_CRITIC attempt 1 round 1` |
+| critic attempt wrong | `S/F(P(1,1,r1),PASSED)`, `S(C(2,1,r2))` | `next start must be TASK_ROLE_CRITIC attempt 1 round 1` |
+| critic after failed producer | `S/F(P(1,1,r1),CHECKS_FAILED)`, `S(C(1,1,r2))` | `next start must be TASK_ROLE_PRODUCER attempt 2 round 1` |
+| same round after CHANGES | `P(1,1)` PASSED, `C(1,1)` CHANGES, `S(P(2,1,r3))` | `next start must be TASK_ROLE_PRODUCER attempt 2 round 2` |
+| critic again after CHANGES | `P(1,1)` PASSED, `C(1,1)` CHANGES, `S(C(1,1,r3))` | `next start must be TASK_ROLE_PRODUCER attempt 2 round 2` |
+| round skipped | `P(1,1)` PASSED, `C(1,1)` CHANGES, `S(P(2,3,r3))` | `next start must be TASK_ROLE_PRODUCER attempt 2 round 2` |
+| producer after critic ERROR | `P(1,1)` PASSED, `C(1,1,r2)` ERROR, `S(P(2,1,r3))` | `next start must be TASK_ROLE_CRITIC attempt 1 round 1` |
+| anything after critic RUN_FAILED | `P(1,1)` PASSED, `C(1,1,r2)` RUN_FAILED, `S(C(1,1,r3))` | `nothing can start after a critic RUN_FAILED` |
+| export after producer | `S/F(P(1,0,r1),RUN_FAILED)`, `S(E(2))` | `next start must be TASK_ROLE_PRODUCER attempt 2 round 0` |
 | finish without start | `F(P(1,0,r1),PASSED)` | `matches no running task` |
 | finish mismatch | `S(P(1,0,r1))` then `F` with attempt 2 / role CRITIC / round 1 / run r9 / task u (five rows) | `matches no running task` |
 | finished twice | `S/F(P(1,0,r1),CHECKS_FAILED)`, `F` again | `matches no running task` |
 | no outcome | `S(P(1,0,r1))`, `F(…,UNSPECIFIED)` | `without an outcome` |
-| outcome not allowed | producer CHANGES_REQUESTED; critic CHECKS_FAILED; export RUN_FAILED; export AWAITING_APPROVAL | `is not allowed for` |
-| gate without id / twice / after start / while running | `evGate("")`; gate, resolve(true), `evGate("t")`; `P(1,0)` ERROR then `evGate("t")`; `S(P(1,0,r1))`, `evGate("u")` | `gate_requested without a task id` / `requested twice` / `requested after the task started` / `requested while task "t" is running` |
+| outcome not allowed | producer CHANGES_REQUESTED; critic CHECKS_FAILED; export RUN_FAILED; export AWAITING_APPROVAL (with a sandbox id) | `is not allowed for` |
+| gate without id / twice / after start / while running | `evGate("")`; gate, resolve(true), `evGate("t")`; `S/F(P(1,0,r1),ERROR)`, `evGate("t")`; `S(P(1,0,r1))`, `evGate("u")` | `gate_requested without a task id` / `requested twice` / `requested after the task started` / `requested while task "t" is running` |
 | second gate while one pending | `evGate("t")`, `evGate("u")` | `requested while the workflow is awaiting_approval` |
+| gate while parked | `S(P(1,0,r1))`, `evPark(…,"sb")`, `evGate("u")` | `requested while the workflow is awaiting_approval` |
 | resolve without request / twice | `evResolve("t", true)`; gate, resolve, resolve | `no pending gate for task "t"` |
 | completed without outcome | `evEnd(UNSPECIFIED, "")` | `without an outcome` |
 | completed while running | `S(P(1,0,r1))`, `evEnd(CANCELLED,"")` | `while task "t" is running` |
@@ -627,18 +650,22 @@ make ci                                      # passes
 - `TestEveryKindIsHandled` in `internal/eventlog` and `TestEveryPayloadKindCovered` in `contracts` both fail as soon as the proto changes; that is expected, fix them as described, do not delete them.
 - No W.1 identifiers in W.2 code or tests, and no test helpers outside the list above (W.1 adds `minimalYAML`, `mustParse`, `parseErr`, `fakeSources` to the same package).
 - `Passed` for a producer depends on the round: round 0 passes the task, round ≥ 1 waits for the critic.
-- `LastRunID` is set by producer starts only.
+- `LastRunID` is set by producer starts only; a continuation changes nothing but `Running`, `Outcome` and the status.
+- A continuation is the only `task_started` that reuses a run id; it is not appended to `RunIDs` again.
+- After `ERROR` the attempt number stays; after `CHECKS_FAILED`/`RUN_FAILED` it goes up by one.
+- `SandboxID` is set only by `task_finished{AWAITING_APPROVAL}` and cleared by the next `task_finished`, not by the continuation's `task_started`.
 - Inputs and budget are copied (`maps.Clone`, `proto.CloneOf`); the state must not alias the events.
 - A `nil` payload (unknown kind) is skipped; a known run payload is an error. Do not mix the two up in the type switch.
 - `Fold` returns `nil` state on error; there is no exported incremental `Apply`.
 
 ## Done checklist
 
-- [ ] Six payloads 23–28 and the three enums exactly as m3.md; `make proto`; `proto-lint` and `proto-breaking` pass
+- [ ] Six payloads 23–28 (with `source_commit = 7`, `TaskStarted.sandbox_id = 7`, `TaskFinished.sandbox_id = 9`) and the three enums exactly as m3.md; `make proto`; `proto-lint` and `proto-breaking` pass
 - [ ] `contracts_test.go` samples; `eventlog` `TestEveryKindIsHandled` skips workflow kinds
 - [ ] `eventlog.WithFirstKind`; default behaviour and messages unchanged; unknown kind refused by `Open`
-- [ ] `workflow.Fold`, `State`, `TaskState`, `Status*` constants; every rule above, every row of `TestFoldInvalidLogs`
+- [ ] `workflow.Fold`, `State` (with `SourceCommit`), `TaskState` (with `SandboxID`), `Status*` constants; m3.md's sequencing rules; every row of `TestFoldInvalidLogs`
+- [ ] Continuation after `AWAITING_APPROVAL` (same run id), same attempt after `ERROR`
 - [ ] Package `internal/workflow` builds and passes with W.2's files alone; `doc.go` identical to the text above
-- [ ] `interfaces.md` §3 and §10
+- [ ] `interfaces.md` §3, §10 and the W.2 subsection of §12
 - [ ] Each new test seen failing once
 - [ ] `go.mod`/`go.sum` unchanged; `make ci` passes

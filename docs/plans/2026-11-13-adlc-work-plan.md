@@ -50,6 +50,7 @@ results, written down in §8 before work moves on.
 | C.1–C.4 | M2-C control plane: approvals, policy v2, kill switch, agent registry and promotion | ✅ merged (PR #11) |
 | Q.1, Q.2 | M2-Q: pass@k and `adlc eval-compare`, failure analysis | ✅ merged (PR #11) |
 | Q.3–Q.5 | M2-Q: fork a run, plan step, model per step role | ✅ on `integration` |
+| W.1–W.6 | M3: workflow file, events, engine, review loop, gates and CLI, SDLC pipeline (`docs/impl/m3.md`) | 📝 briefed; build after G1 |
 | E.4 | Manual baseline (a person runs it; sets gate G1's numbers) | ⏳ open |
 | 1.10 | Coder agent iteration (needs model API keys and a Docker host) | ⏳ open |
 
@@ -136,6 +137,7 @@ Set the numeric thresholds after E.4, once the suite's difficulty is known.
 - **Epics:** task graph (DAG) with nested budgets; review loop (producer ↔ critic); SDLC agent roles from design §4; pipeline-level evals.
 - **Demo:** an issue goes through spec, code, review and an approval gate, and ends as a PR.
 - **Needs first:** evidence from M1/M2 that a single agent is reliable enough to be worth chaining; a multi-agent pipeline multiplies single-agent failure rates.
+- **Briefs:** `docs/impl/m3.md` (shared decisions and API) and tasks W.1–W.6. The demo ends with a local branch `adlc/<workflow-id>`; pushing it and opening the PR stay with the person (design §3.6).
 
 ### M4 and later — options with triggers
 

@@ -11,7 +11,8 @@ reject every malformed file with an error that names the field
 tasks in their fixed run order (`Order`, m3.md decision 5), make a new
 workflow id (`ID`), and render a task's prompt template with the four
 functions `input`, `file`, `result`, `diff` (m3.md decision 6), each value
-capped at 64 KiB. Nothing runs yet: the engine (W.3) uses this package.
+capped at 64 KiB. Render only calls a `Sources`; what a value is (m3.md
+decision 6) is the engine's job. Nothing runs yet: the engine (W.3) uses this package.
 W.1 runs in parallel with W.2 (events and fold); neither needs the other's code.
 
 ## Read first
@@ -33,20 +34,20 @@ Create:
 
 ```
 internal/workflow/doc.go              package comment (identical in W.1 and W.2, see below)
-internal/workflow/workflow.go         types, constants, ErrInvalidWorkflow, Load, Parse, decoding, Order, ID, agentFile
+internal/workflow/workflow.go         types, constants, ErrInvalidWorkflow, Load, Parse, decoding, Order, ID
 internal/workflow/validate.go         problems, Validate and its rules, findCycle, dependency closure, prompt dry run
 internal/workflow/render.go           Sources, MaxTemplateValueBytes, TruncatedMarker, Render, template functions, capValue
 internal/workflow/workflow_test.go
 internal/workflow/validate_test.go
 internal/workflow/render_test.go
 internal/workflow/refsync_test.go     package workflow_test: registry syntax matches controlplane.ParseRef
-internal/workflow/testdata/sdlc.yaml  the example of m3.md, byte for byte the YAML block under "Workflow file"
+internal/workflow/testdata/sdlc.yaml  the (illustrative) example of m3.md, byte for byte the YAML block under "Workflow file"
 ```
 
 Change:
 
 ```
-docs/impl/interfaces.md   §1: one row; new §12 at the end (text below)
+docs/impl/interfaces.md   §1: one row; creates §12 "M3 additions" at the end (text below); W.2–W.6 append to it
 ```
 
 W.2 owns `internal/workflow/state.go`, `fold.go` and `fold_test.go`; do not
@@ -80,9 +81,9 @@ type InputKind string
 
 // Input kinds.
 const (
-	InputDir  InputKind = "dir"  // a host directory; the engine copies it into the workspace
-	InputFile InputKind = "file" // a host file
-	InputText InputKind = "text" // a literal value
+	InputDir  InputKind = "dir"  // a host directory that seeds the workspace; no value in prompts
+	InputFile InputKind = "file" // a host file; {{ input }} gives its content (snapshot taken at Start)
+	InputText InputKind = "text" // a literal value; {{ input }} gives it
 )
 
 // TaskKind says what runs a task.
@@ -168,7 +169,7 @@ type fileReview struct {
 ```
 
 **`max_usd` is read as the literal text of the YAML scalar.** m3.md writes
-`max_usd: 2.00` unquoted (agent files quote it: `"1.00"`). Decoding an
+`max_usd: 3.00` unquoted (agent files quote it: `"1.00"`). Decoding an
 unquoted number into a `string` with goccy/go-yaml goes through a float and
 loses the text: `0.000001` becomes `"1e-06"` and `010` becomes `"8"`. So
 `usdText` implements `yaml.NodeUnmarshaler` and keeps the token as written:
@@ -275,14 +276,14 @@ the task index, `j` the index inside a list):
 
 | # | Path | Rule | Message |
 |---|------|------|---------|
-| 1 | `name` | matches `^[a-z0-9][a-z0-9-]*$` and `len <= 64` | `must match ^[a-z0-9][a-z0-9-]*$ and be at most 64 characters, got %q` |
+| 1 | `name` | matches `^[a-z0-9][a-z0-9-]*$` and `len <= 20` (m3.md decision 14: the id must fit the run-id rule) | `must match ^[a-z0-9][a-z0-9-]*$ and be at most 20 characters, got %q` |
 | 2 | `version` | `1 <= v <= 999999999` (it is a `uint32` in `workflow_started`) | `must be between 1 and 999999999, got %d` |
 | 3 | `inputs[j].name` | matches `^[a-z][a-z0-9_]*$` and `len <= 32` | `must match ^[a-z][a-z0-9_]*$ and be at most 32 characters, got %q` |
 | 4 | `inputs[j].name` | not used by an earlier input (only when rule 3 passed) | `duplicate input %q` |
 | 5 | `inputs[j].kind` | `dir`, `file` or `text` | `must be one of dir, file, text, got %q` |
 | 6 | `budget` | `checkBudget(p, "budget", w.Budget)` (below) | |
 | 7 | `tasks` | at least one task | `at least one task is required` |
-| 8 | `tasks[i].id` | same pattern and length as `name` | `must match ^[a-z0-9][a-z0-9-]*$ and be at most 64 characters, got %q` |
+| 8 | `tasks[i].id` | matches `^[a-z0-9][a-z0-9-]*$` and `len <= 64` | `must match ^[a-z0-9][a-z0-9-]*$ and be at most 64 characters, got %q` |
 | 9 | `tasks[i].id` | not used by an earlier task (only when rule 8 passed) | `duplicate task id %q` |
 | 10 | `tasks[i].kind` | `agent` or `export` | `must be one of agent, export, got %q` |
 | 11 | `tasks[i].agent` | kind agent: not empty | `is required` |
@@ -300,6 +301,9 @@ the task index, `j` the index inside a list):
 | 23 | `tasks[i].depends_on[j]` | not listed earlier in the same list | `duplicate dependency %q` |
 | 24 | `tasks` | no cycle: `findCycle` (below) | `dependency cycle: a -> b -> c -> a` |
 | 25 | `tasks[i].prompt` | kind agent, prompt not blank: the dry run (below) succeeds | the template error, `%v` |
+
+W.5 later appends one rule after 25 ("an export task needs an input `repo` of
+kind `dir`", it owns `ExportInput`); keep `check` easy to extend.
 
 Rules 10–18 that depend on the kind are skipped when rule 10 failed. Rule 17
 checks `t.Budget != (Budget{})`; rule 19 is not run for export tasks.
@@ -322,28 +326,27 @@ the smaller value, W.3).
 syntax only; **it does not check that the file exists or that the registry
 has the version**:
 
-- Parse works on bytes and Validate must stay pure (tests, and W.3 re-parses
-  the file on resume to compare digests).
+- Parse works on bytes and Validate must stay pure (tests, and resume
+  re-parses the file to compare digests).
 - A registry reference needs the control database, which W.1 does not open.
-- W.3 resolves and loads every agent of the workflow before it writes
-  `workflow_started`, so a missing file still fails before any work is done.
+- The CLI (W.5) resolves every reference (a path is joined with
+  `Workflow.Dir`; `NAME@N`/`NAME@ENV` go through the registry) and loads every
+  agent before `workflow_started` is written (m3.md "Types"), so a missing
+  file still fails before any work is done.
 
 ```go
 // refRE is the syntax of controlplane.ParseRef (NAME@N, NAME@staging,
-// NAME@prod). It is copied, not imported, to keep internal/workflow free of
-// internal/controlplane (which imports internal/evals); refsync_test.go
-// keeps the two in step.
+// NAME@prod). It is copied, not imported, so internal/workflow imports only
+// what m3.md decision 1 lists; refsync_test.go keeps the two in step.
 var refRE = regexp.MustCompile(`^([a-z][a-z0-9-]{0,31})@([1-9][0-9]{0,8}|staging|prod)$`)
 
 // checkAgentRef adds a problem at path unless ref is a registry reference or
 // a path whose extension is .yaml or .yml. The caller checks ref != "".
 func checkAgentRef(p *problems, path, ref string)
-
-// agentFile says how an agent reference names its agent: a registry
-// reference (registry true, path "") or a file (path made absolute against
-// w.Dir when it is relative; filepath.Clean applied). W.3 calls it.
-func (w *Workflow) agentFile(ref string) (path string, registry bool)
 ```
+
+There is no resolving helper in W.1: resolution is the CLI's (W.5), and an
+unexported function used only by tests fails the `unused` linter.
 
 A reference can never be both: `refRE` allows no dot, and a path needs a
 `.yaml`/`.yml` extension.
@@ -393,26 +396,30 @@ modify them).
 ### `ID`
 
 ```go
-// ID returns a new workflow id "<name>@<version>-<UTC yyyymmddThhmmssZ>-<6 hex>",
-// e.g. "sdlc@1-20261114T080507Z-abcdef". The 6 hex digits are 3 random bytes.
+// ID returns a new workflow id "<name>-v<version>-<UTC yyyymmddThhmmssZ>-<6 hex>",
+// e.g. "sdlc-v1-20261114T080507Z-abcdef" (m3.md decision 14). The 6 hex
+// digits are 3 random bytes.
 func (w *Workflow) ID(now time.Time) string
 ```
 
 `var b [3]byte`; if `w.rand != nil` then `_, _ = io.ReadFull(w.rand, b[:])`
 (a short test reader leaves zeros), else `_, _ = rand.Read(b[:])`
 (`crypto/rand`; it never returns an error). Then
-`fmt.Sprintf("%s@%d-%s-%s", w.Name, w.Version, now.UTC().Format("20060102T150405Z"), hex.EncodeToString(b[:]))`.
-`ID` never calls `time.Now`.
+`fmt.Sprintf("%s-v%d-%s-%s", w.Name, w.Version, now.UTC().Format("20060102T150405Z"), hex.EncodeToString(b[:]))`.
+`ID` never calls `time.Now`. With rules 1 and 2 the id is at most
+20 + 11 + 17 + 7 = 55 characters and matches `^[A-Za-z0-9._-]{1,64}$`, so the
+child run ids `<workflow-id>-<n>` fit the repository's run-id rule. (`--id`
+values are checked by the CLI, W.5.)
 
 ### Rendering (`render.go`)
 
 ```go
 // Sources supplies the values of the prompt functions (the engine, W.3).
 type Sources interface {
-	Input(name string) (string, error)    // {{ input "name" }}
+	Input(name string) (string, error)    // {{ input "name" }}: a text input's value or a file input's content; a dir input is an error
 	File(path string) (string, error)     // {{ file "path" }}, path relative to the workspace
-	Result(taskID string) (string, error) // {{ result "task" }}: an earlier task's final message
-	Diff(taskID string) (string, error)   // {{ diff "task" }}: the change an earlier task committed
+	Result(taskID string) (string, error) // {{ result "task" }}: final message of the task's last producer run
+	Diff(taskID string) (string, error)   // {{ diff "task" }}: the change the task committed
 }
 
 // MaxTemplateValueBytes caps every value a prompt function returns.
@@ -475,14 +482,14 @@ template fails at load time, not in the middle of a workflow:
 // checkSources answers the dry run: declared inputs, any file, and only
 // tasks the prompt's task depends on (directly or not).
 type checkSources struct {
-	inputs map[string]bool // declared input names
+	inputs map[string]InputKind // declared inputs
 	deps   map[string]bool // dependencies(w.Tasks, i)
 }
 ```
 
 | Method | Returns |
 |--------|---------|
-| `Input(name)` | `"", nil` if declared, else `"", errors.New("not declared in inputs")` |
+| `Input(name)` | `"", nil` for a declared `text` or `file` input; a declared `dir` input → `"", errors.New("a dir input has no value in a prompt")`; otherwise `"", errors.New("not declared in inputs")` |
 | `File(path)` | `"", nil` (the path check is in the `file` function itself) |
 | `Result(id)`, `Diff(id)` | `"", nil` if `deps[id]`, else `"", errors.New("not a dependency of this task (list it in depends_on)")` |
 
@@ -506,14 +513,18 @@ Append at the end of the file:
 ```markdown
 ## §12 M3 additions (briefs W.1–W.6)
 
-Shared decisions and the exact API: `docs/impl/m3.md` ("The API"). Constant
-names m3.md leaves open, fixed by the briefs:
+Shared decisions and the exact API: `docs/impl/m3.md` ("The API"). W.1
+creates this section; W.2–W.6 each append their own subsection below.
 
-- **W.1:** `InputDir`, `InputFile`, `InputText`; `TaskAgent`, `TaskExport`;
-  `GateNone`, `GateApproval`. Agent references are checked for syntax only
-  (a `.yaml`/`.yml` path or `NAME@N`/`NAME@ENV`); the engine loads them.
-- **W.2:** `StatusRunning`, `StatusAwaitingApproval`, `StatusCompleted`;
-  `eventlog.WithFirstKind`; event payloads 23–28 (§10).
+### Workflow file (W.1)
+
+`InputKind` (`InputDir`, `InputFile`, `InputText`), `TaskKind` (`TaskAgent`,
+`TaskExport`), `GateKind` (`GateNone`, `GateApproval`), `Input`, `Budget`,
+`Review`, `Task`, `Workflow`, `Load`, `Parse`, `Validate`, `Order`, `ID`
+(`<name>-v<version>-<UTC yyyymmddThhmmssZ>-<6 hex>`), `ErrInvalidWorkflow`,
+`Sources`, `MaxTemplateValueBytes`, `TruncatedMarker`, `Render`. Agent
+references are checked for syntax only (a `.yaml`/`.yml` path or
+`NAME@N`/`NAME@ENV`); the CLI resolves and loads them (W.5).
 ```
 
 ## Steps
@@ -526,7 +537,7 @@ names m3.md leaves open, fixed by the briefs:
    Write `TestValidateTable`, `TestValidateReportsAllProblems`, `TestValidateCycle`, `TestValidateCodeBuiltWorkflow`; pass.
 5. `render.go`: `Sources`, constants, `funcs`, `noSources`, `parsePrompt`, `capValue`, `Render`. Write `render_test.go`; pass.
 6. Rule 25 (dry run) in `validate.go`; write `TestValidatePrompt`; pass.
-7. `Order`, `ID`, `agentFile`; their tests; `refsync_test.go`.
+7. `Order`, `ID`; their tests; `refsync_test.go`.
 8. `interfaces.md` §1 and §12.
 9. Break each piece once on purpose (for example drop the `utf8.RuneStart` loop,
    or pick the last ready task in `Order`), see a test fail, restore.
@@ -546,7 +557,7 @@ test files never collide with them): `minimalYAML` (const: `"name: wf\nversion: 
 
 | Test | Asserts |
 |------|---------|
-| `TestParseFullExample` | `Parse(testdata/sdlc.yaml bytes, "/wf")` equals (`reflect.DeepEqual`) `Workflow{Name: "sdlc", Version: 1, Dir: "/wf", Inputs: [{repo dir} {issue file}], Budget: {2_000_000, 2_000_000, time.Hour}, Digest: "sha256:"+hex(sha256(bytes))}` with tasks: `spec` {Kind agent, Agent `../agents/sdlc/spec.yaml`, Prompt as in the file, Attempts 1, Gate ""}; `implement` {DependsOn [spec], Checks [`go build ./...`, `go test ./...`], Attempts 2, Budget {MaxUSDMicros: 800_000}, Review {`../agents/sdlc/reviewer.yaml`, 2}}; `release` {Kind export, DependsOn [implement], Gate approval, Attempts 1, Agent "", Prompt ""} |
+| `TestParseFullExample` | `Parse(testdata/sdlc.yaml bytes, "/wf")` equals (`reflect.DeepEqual`) `Workflow{Name: "sdlc", Version: 1, Dir: "/wf", Inputs: [{repo dir} {issue file}], Budget: {3_000_000, 2_000_000, time.Hour}, Digest: "sha256:"+hex(sha256(bytes))}` with tasks: `spec` {Kind agent, Agent `../agents/sdlc/spec.anthropic.yaml`, Prompt as in the file, Attempts 1, Gate ""}; `implement` {DependsOn [spec], Checks [`go build ./...`, `go test ./...`], Attempts 2, Budget {MaxUSDMicros: 1_500_000}, Review {`../agents/sdlc/reviewer.anthropic.yaml`, 2}} (Agent `../agents/sdlc/coder.anthropic.yaml`); `release` {Kind export, DependsOn [implement], Gate approval, Attempts 1, Agent "", Prompt ""} |
 | `TestParseDefaults` | `minimalYAML` → task Kind `agent`, Attempts 1, Gate `""`, Review nil, Budget zero; with `gate: none` → Gate `""`; with `attempts: 0` → 1 |
 | `TestParseUnknownField` | `budget: {max_tokenz: 1}` → `parseErr(..., "decode:", "unknown field \"max_tokenz\"")`; a duplicate key `name` twice → contains `already defined` |
 | `TestParseMaxUSD` | table, as `budget: {max_usd: V}`: `2.00`→2_000_000, `0.80`→800_000, `"1.5"`→1_500_000, `0.000001`→1, `2`→2_000_000, `0`→0; errors with message `budget.max_usd: "V" is not a decimal amount with at most 6 decimals` for `1e3`, `-1`, `010`, `0.1234567`, `"x"`; `[1]` → contains `max_usd must be a number or a string` |
@@ -558,17 +569,16 @@ test files never collide with them): `minimalYAML` (const: `"name: wf\nversion: 
 | `TestLoadInvalidFileNamesPath` | invalid file → text starts with the path given, `errors.Is(err, ErrInvalidWorkflow)` |
 | `TestOrder` | table (ids, `name(deps)`): `a b c` → `a b c`; `a b(c) c` → `a c b`; `d(b,c) b(a) c(a) a` → `a b c d`; `x y(x) z` → `x y z`; `b(a) a` → `a b` |
 | `TestOrderWithCycleKeepsEveryTask` | Workflow literal `a(b) b(a) c` → `c a b` |
-| `TestID` | `w.rand = bytes.NewReader([]byte{0xab, 0xcd, 0xef})`, now = 2026-11-14 09:05:07 in `time.FixedZone("x", 3600)` → `sdlc@1-20261114T080507Z-abcdef`; with `rand` nil two ids match `^sdlc@1-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$` |
-| `TestAgentFile` | `Dir: "/wf"`: `../agents/a.yaml` → `/agents/a.yaml`, false; `/abs/a.yml` → `/abs/a.yml`, false; `coder@1` and `coder@prod` → `""`, true |
+| `TestID` | `w.rand = bytes.NewReader([]byte{0xab, 0xcd, 0xef})`, now = 2026-11-14 09:05:07 in `time.FixedZone("x", 3600)` → `sdlc-v1-20261114T080507Z-abcdef`; with `rand` nil two ids match `^sdlc-v1-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$`; a 20-character name with version 999999999 gives an id of 55 characters matching `^[A-Za-z0-9._-]{1,64}$` |
 
 `validate_test.go`:
 
 | Test | Asserts |
 |------|---------|
-| `TestValidateTable` | one row per rule 1–23 (both messages of rules 15, 17, 18): a YAML built from `minimalYAML` with one change, and the exact `"<path>: <message>"` text expected; e.g. `name: Bad` → `name: must match ^[a-z0-9][a-z0-9-]*$ and be at most 64 characters, got "Bad"`; a 65-character name; `version: 0`; input `Repo`; two inputs `repo`; input kind `url`; budget `max_tokens: -1` → `budget.max_tokens: must be >= 0, got -1`; `tasks: []`; id `-a`; two tasks `a`; kind `script`; agent missing; agent `coder` and `coder@0` → rule 12; prompt `"  "`; check `""`; review without critic; `max_rounds: 0` and `6`; export with agent, prompt, checks, review, budget (5 rows); `attempts: 6`, `attempts: -1`; export `attempts: 2` → `tasks[1].attempts: must be 1 for kind export, got 2`; `gate: always`; `depends_on: [nope]`, `[a]` on task `a`, `[b, b]` |
+| `TestValidateTable` | one row per rule 1–23 (both messages of rules 15, 17, 18): a YAML built from `minimalYAML` with one change, and the exact `"<path>: <message>"` text expected; e.g. `name: Bad` → `name: must match ^[a-z0-9][a-z0-9-]*$ and be at most 20 characters, got "Bad"`; a 21-character name; a 65-character task id; `version: 0`; input `Repo`; two inputs `repo`; input kind `url`; budget `max_tokens: -1` → `budget.max_tokens: must be >= 0, got -1`; `tasks: []`; id `-a`; two tasks `a`; kind `script`; agent missing; agent `coder` and `coder@0` → rule 12; prompt `"  "`; check `""`; review without critic; `max_rounds: 0` and `6`; export with agent, prompt, checks, review, budget (5 rows); `attempts: 6`, `attempts: -1`; export `attempts: 2` → `tasks[1].attempts: must be 1 for kind export, got 2`; `gate: always`; `depends_on: [nope]`, `[a]` on task `a`, `[b, b]` |
 | `TestValidateReportsAllProblems` | `name: X`, `version: 0`, task id `""` → one error containing all three messages, each on its own line |
 | `TestValidateCycle` | `a(b) b(c) c(a)` → contains `tasks: dependency cycle: a -> b -> c -> a`; `a(a)` alone → contains `task "a" depends on itself` and not `dependency cycle` |
-| `TestValidatePrompt` | table, prompt of task `b` (depends on `a`, inputs `issue`): `{{ if` → `tasks[1].prompt: template: b:1: unclosed action`; `{{ nope "x" }}` → `function "nope" not defined`; `{{ .Foo }}` → `nil data; no entry for key "Foo"`; `{{ input 1 }}` → `expected string; found 1`; `{{ input "nope" }}` → `input "nope": not declared in inputs`; `{{ result "c" }}` (c exists, not a dependency) → `result "c": not a dependency of this task (list it in depends_on)`; `{{ diff "c" }}` → same for diff; `{{ file "/etc/passwd" }}` and `{{ file "../x" }}` → `not a relative path inside the workspace`; valid: `{{ input "issue" }} {{ file "spec.md" }} {{ result "a" }} {{ diff "a" }}`; valid: task `c(b)` using `{{ result "a" }}` (transitive); valid: `{{ if false }}{{ input "nope" }}{{ end }}` |
+| `TestValidatePrompt` | table, prompt of task `b` (depends on `a`; inputs `repo` dir, `issue` file, `note` text): `{{ if` → `tasks[1].prompt: template: b:1: unclosed action`; `{{ nope "x" }}` → `function "nope" not defined`; `{{ .Foo }}` → `nil data; no entry for key "Foo"`; `{{ input 1 }}` → `expected string; found 1`; `{{ input "nope" }}` → `input "nope": not declared in inputs`; `{{ input "repo" }}` → `input "repo": a dir input has no value in a prompt`; `{{ result "c" }}` (c exists, not a dependency) → `result "c": not a dependency of this task (list it in depends_on)`; `{{ diff "c" }}` → same for diff; `{{ file "/etc/passwd" }}` and `{{ file "../x" }}` → `not a relative path inside the workspace`; valid: `{{ input "issue" }} {{ input "note" }} {{ file "spec.md" }} {{ result "a" }} {{ diff "a" }}`; valid: task `c(b)` using `{{ result "a" }}` (transitive); valid: `{{ if false }}{{ input "nope" }}{{ end }}` |
 | `TestValidateCodeBuiltWorkflow` | table of valid `Workflow` literals with one change each: task Kind `""` → `tasks[0].kind: must be one of agent, export, got ""`; `Budget{MaxUSDMicros: -1}` → `budget.max_usd: must be >= 0, got -1`; `Attempts: 0` → `tasks[0].attempts: must be between 1 and 5, got 0`; a valid literal → nil |
 
 `render_test.go`:
@@ -601,7 +611,7 @@ make ci                                                                         
 
 ## Out of scope
 
-- Loading agent files, checking they exist, resolving registry references (W.3).
+- Loading agent files, checking they exist, resolving registry references (the CLI, W.5).
 - Converting `Budget` to `*adlcv1.Budget` and nesting budgets (W.3).
 - Any event, the fold, `eventlog` (W.2).
 - Checking that an export task has a `repo` input of kind `dir` (`ExportInput` is W.5's; W.5 adds that rule).
@@ -612,7 +622,7 @@ make ci                                                                         
 
 - Do not decode `max_usd` into a plain `string`: unquoted numbers lose their text (see `usdText`).
   goccy/go-yaml also turns `version: 1.5` and `max_tokens: 1.5` into 1 without an error; leave that, do not add custom decoders for them.
-- Do not import `internal/controlplane` from non-test code (it imports `internal/evals`; a later task may make `evals` or the CLI depend on `workflow`). Copy `refRE`; `refsync_test.go` is an external test package, which may import it.
+- Do not import `internal/controlplane` from non-test code: m3.md decision 1 lists what `internal/workflow` imports. Copy `refRE`; `refsync_test.go` is an external test package, which may import it.
 - `text/template`, not `html/template` (no HTML escaping in prompts).
   Add the functions with `Funcs` **before** `Parse`, or parsing fails with `function "input" not defined`.
 - `capValue` counts bytes, not runes, and the marker is inside the 64 KiB, not after it.
@@ -629,9 +639,9 @@ make ci                                                                         
 - [ ] `Parse`/`Load` decode strictly, apply defaults (kind agent, attempts 1, gate none), convert budgets, keep `max_usd` text exact
 - [ ] Every rule 1–25 with its exact message; all problems reported at once, wrapped in `ErrInvalidWorkflow`
 - [ ] Cycle message shows the path; self-dependency reported separately
-- [ ] Agent references: syntax only, `agentFile` for W.3
-- [ ] `Order` topological with ties in file order; `ID` format with injectable random source
+- [ ] Agent references: syntax only (resolution is W.5's)
+- [ ] `Order` topological with ties in file order; `ID` = `<name>-v<version>-<UTC time>-<6 hex>` with injectable random source
 - [ ] `Render` with four functions, 64 KiB cap with `TruncatedMarker`, errors name the task and wrap the source error
-- [ ] `interfaces.md` §1 row and §12
+- [ ] `interfaces.md` §1 row; §12 created with the W.1 subsection
 - [ ] Each new test seen failing once
 - [ ] `go.mod`/`go.sum` unchanged; `make ci` passes
