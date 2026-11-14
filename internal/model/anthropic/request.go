@@ -127,7 +127,13 @@ func buildTools(specs []model.ToolSpec) ([]sdk.ToolUnionParam, error) {
 				return nil, fmt.Errorf("anthropic: tool %s: input schema: %w", spec.Name, err)
 			}
 		}
-		in := sdk.ToolInputSchemaParam{Properties: schema["properties"]}
+		props := schema["properties"]
+		if props == nil {
+			// An all-zero ToolInputSchemaParam is omitted from the request
+			// (omitzero), and the API requires input_schema.
+			props = map[string]any{}
+		}
+		in := sdk.ToolInputSchemaParam{Properties: props}
 		if req, ok := schema["required"].([]any); ok {
 			for _, r := range req {
 				if s, ok := r.(string); ok {

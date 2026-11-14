@@ -609,3 +609,37 @@ func TestContract(t *testing.T) {
 		return newFakeAPI(t, []int{status}, body).adapter()
 	})
 }
+
+// A tool without an input schema must still send one: the API rejects a
+// tool whose input_schema is missing ("Field required").
+func TestBuildToolsAlwaysSendsInputSchema(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema json.RawMessage
+	}{
+		{name: "no schema"},
+		{name: "empty object", schema: json.RawMessage(`{}`)},
+		{name: "type only", schema: json.RawMessage(`{"type":"object"}`)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tools, err := buildTools([]model.ToolSpec{{Name: "ping", InputSchema: tt.schema}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := json.Marshal(tools[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				InputSchema map[string]any `json:"input_schema"`
+			}
+			if err := json.Unmarshal(b, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.InputSchema["type"] != "object" {
+				t.Fatalf("tool JSON = %s, want an input_schema of type object", b)
+			}
+		})
+	}
+}
