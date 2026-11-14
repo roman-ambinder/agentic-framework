@@ -237,3 +237,65 @@ func TestBugStatus(t *testing.T) {
 		}
 	}
 }
+
+// imaged sets the ImageID of every result to img; "" leaves it unset.
+func imaged(img string, results []Result) []Result {
+	for i := range results {
+		results[i].ImageID = img
+	}
+	return results
+}
+
+// imageRep builds a report with one graded result of agent on bug x per image id; "" is a result without an image.
+func imageRep(agent string, images ...string) Report {
+	var rs []Result
+	for _, img := range images {
+		rs = append(rs, imaged(img, cbug(agent, "x", 1, 1))...)
+	}
+	return rep(rs)
+}
+
+func TestPrintComparisonImageWarnings(t *testing.T) {
+	a := "sha256:" + strings.Repeat("a", 64)
+	b := "sha256:" + strings.Repeat("b", 64)
+	tests := []struct {
+		name      string
+		base, new []string
+		want      []string
+	}{
+		{"same single image", []string{a}, []string{a}, nil},
+		{"different images", []string{a}, []string{b}, []string{
+			"warning: the reports used different images: base sha256:aaaaaaaaaaaa, new sha256:bbbbbbbbbbbb",
+		}},
+		{"base mixes, new has no image", []string{a, b}, []string{""}, []string{
+			"warning: base report mixes images: sha256:aaaaaaaaaaaa, sha256:bbbbbbbbbbbb",
+		}},
+		{"different, new mixes", []string{a}, []string{a, b}, []string{
+			"warning: the reports used different images: base sha256:aaaaaaaaaaaa, new sha256:aaaaaaaaaaaa, sha256:bbbbbbbbbbbb",
+			"warning: new report mixes images: sha256:aaaaaaaaaaaa, sha256:bbbbbbbbbbbb",
+		}},
+		{"base has no image", []string{""}, []string{a}, nil},
+		{"new has no image", []string{a}, []string{""}, nil},
+		{"same image twice is not a mix", []string{a, a}, []string{a}, nil},
+		{"empty ids are ignored", []string{"", a}, []string{a}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := Compare(imageRep("a@1", tt.base...), imageRep("a@2", tt.new...), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var buf bytes.Buffer
+			PrintComparison(&buf, c)
+			var got []string
+			for _, line := range strings.Split(buf.String(), "\n") {
+				if strings.HasPrefix(line, "warning: ") {
+					got = append(got, line)
+				}
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("warnings = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

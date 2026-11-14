@@ -78,3 +78,34 @@ func TestWriteTreeLastChildAndRootEvents(t *testing.T) {
 		t.Errorf("got:\n%s\nwant:\n%s", buf.String(), want)
 	}
 }
+
+func TestWriteTreeImageLine(t *testing.T) {
+	const id = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	tests := []struct {
+		name string
+		img  *adlcv1.SandboxImage
+		want string
+	}{
+		{"ref and id", &adlcv1.SandboxImage{Ref: "golang:1.26", Id: id}, "  image: golang:1.26 (sha256:0123456789ab)\n"},
+		{"ref only", &adlcv1.SandboxImage{Ref: "golang:1.26"}, "  image: golang:1.26\n"},
+		{"absent", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start := runStarted()
+			start.GetRunStarted().SandboxImage = tt.img
+			root, err := Build(numbered(start))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var buf bytes.Buffer
+			if err := WriteTree(&buf, root); err != nil {
+				t.Fatal(err)
+			}
+			want := "run r1  [running]  +0s  -  in=0 out=0 $0.000000\n" + tt.want
+			if buf.String() != want {
+				t.Errorf("got:\n%s\nwant:\n%s", buf.String(), want)
+			}
+		})
+	}
+}

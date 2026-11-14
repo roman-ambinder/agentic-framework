@@ -48,11 +48,13 @@ type runSandbox struct {
 	// spec is what the sandbox was created (or restored) from; a failed
 	// pause record restores from it.
 	spec sandbox.Spec
+	// image is the image the sandbox runs, recorded in run_started.
+	image *adlcv1.SandboxImage
 }
 
 // startRunSandbox creates the sandbox the agent declares and puts its id into
 // the tool commands. It returns nil, nil for an agent without a sandbox.
-func startRunSandbox(ctx context.Context, a *agentconfig.Agent, runID string, open openRunBackend) (*runSandbox, error) {
+func startRunSandbox(ctx context.Context, a *agentconfig.Agent, runID string, open openRunBackend, stdout io.Writer) (*runSandbox, error) {
 	spec, ok := a.SandboxSpec(runID)
 	if !ok {
 		return nil, nil
@@ -67,7 +69,34 @@ func startRunSandbox(ctx context.Context, a *agentconfig.Agent, runID string, op
 		return nil, fmt.Errorf("run: create sandbox: %w", err)
 	}
 	expandSandboxID(a, h)
-	return &runSandbox{backend: b, handle: h, runID: runID, suspends: a.Sandbox.Suspends(), spec: spec}, nil
+	image := resolveSandboxImage(ctx, b, h, spec.Image, stdout)
+	return &runSandbox{backend: b, handle: h, runID: runID, suspends: a.Sandbox.Suspends(), spec: spec, image: image}, nil
+}
+
+// resolveSandboxImage reads the content ID of the image the sandbox runs. A
+// backend that cannot, or a failed read, leaves Id empty: it never fails the run.
+func resolveSandboxImage(ctx context.Context, b runBackend, h sandbox.Handle, ref string, stdout io.Writer) *adlcv1.SandboxImage {
+	img := &adlcv1.SandboxImage{Ref: ref}
+	r, ok := b.(sandbox.ImageResolver)
+	if !ok {
+		return img
+	}
+	id, err := r.ImageID(ctx, h)
+	if err != nil {
+		fmt.Fprintf(stdout, "sandbox: could not read the image ID: %v\n", err)
+		return img
+	}
+	img.Id = id
+	fmt.Fprintf(stdout, "sandbox: image %s (%s)\n", ref, sandbox.ShortImageID(id))
+	return img
+}
+
+// imageOrNil returns the recorded image; a nil *runSandbox has none.
+func (s *runSandbox) imageOrNil() *adlcv1.SandboxImage {
+	if s == nil {
+		return nil
+	}
+	return s.image
 }
 
 // expandSandboxID replaces {{sandbox_id}} in every tool command.

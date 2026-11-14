@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,11 +229,38 @@ func TestRunSandboxDestroyedWhenBuildFails(t *testing.T) {
 func TestStartRunSandboxExpandsPlaceholder(t *testing.T) {
 	b := newRecordingBackend(t)
 	a := sandboxAgent(t, sandboxAgentYAML)
-	sb, err := startRunSandbox(context.Background(), a, "r1", func(context.Context) (runBackend, error) { return b, nil })
+	sb, err := startRunSandbox(context.Background(), a, "r1", func(context.Context) (runBackend, error) { return b, nil }, io.Discard)
 	if err != nil || sb == nil {
 		t.Fatalf("sb = %v, err = %v", sb, err)
 	}
 	if got := strings.Join(a.Tools[0].Command, " "); got != "adlc tool shell --sandbox host-1" {
 		t.Errorf("command = %q", got)
+	}
+}
+
+func TestRunSandboxRecordsImage(t *testing.T) {
+	e := pausableRun(t, "", &sandboxtest.Pausable{})
+	rs := runEvents(t, e.db)[0].GetRunStarted()
+	img := rs.GetSandboxImage()
+	if img.GetRef() != "golang:1.26" || img.GetId() != "sha256:fake-golang:1.26" {
+		t.Errorf("sandbox_image = %v", img)
+	}
+	if !strings.Contains(e.stdout, "sandbox: image golang:1.26 (sha256:fake-golang:1.26)\n") {
+		t.Errorf("stdout = %q", e.stdout)
+	}
+}
+
+func TestRunSandboxImageIDFailureDoesNotFailRun(t *testing.T) {
+	e := pausableRun(t, "", &sandboxtest.Pausable{ImageIDErr: errors.New("inspect failed")})
+	var ee *exitError
+	if !errors.As(e.err, &ee) || ee.code != 2 {
+		t.Fatalf("err = %v, want exit 2 (awaiting approval)", e.err)
+	}
+	img := runEvents(t, e.db)[0].GetRunStarted().GetSandboxImage()
+	if img.GetRef() != "golang:1.26" || img.GetId() != "" {
+		t.Errorf("sandbox_image = %v", img)
+	}
+	if !strings.Contains(e.stdout, "sandbox: could not read the image ID: inspect failed\n") {
+		t.Errorf("stdout = %q", e.stdout)
 	}
 }

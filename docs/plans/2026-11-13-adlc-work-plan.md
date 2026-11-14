@@ -52,6 +52,7 @@ results, written down in §8 before work moves on.
 | Q.3–Q.5 | M2-Q: fork a run, plan step, model per step role | ✅ on `integration` |
 | P.1–P.3, P.5a–P.5b | Sandbox pause, files path: a run parked for approval frees its container and restores `/workspace` on approve | ✅ done (P.4, process checkpoints, open) |
 | F.1–F.5 | Sandbox pause follow-ups: restore when a pause cannot be recorded, delete finished runs' snapshots, version check before restore, attach kept containers without `{{sandbox_id}}`, `--workspace-out`/`--keep-sandbox` on approve and resume | ✅ done |
+| I.1–I.6 | Record the sandbox image digest: run events, image resolver, eval results, eval-compare warnings, promotion refuses evidence from more than one image | ✅ done |
 | E.4 | Manual baseline (a person runs it; sets gate G1's numbers) | ⏳ open |
 | 1.10 | Coder agent iteration (needs model API keys and a Docker host) | ⏳ open |
 

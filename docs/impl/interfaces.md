@@ -546,6 +546,7 @@ type Config struct {
 	// MaxInputTokens 0 = derived from the adapter's MaxContextTokens.
 	Context contextmgr.Budget
 	Plan    PlanConfig // task Q.4: planning call before step 1; zero = off
+	SandboxImage *adlcv1.SandboxImage // task I.1: image of the run's sandbox, recorded in run_started; nil = none
 }
 
 // PlanCallID is the call id of the planning call; its step is 0 (task Q.4).
@@ -903,6 +904,22 @@ var (
 const ProcessesNotSupported = "process checkpoints are not supported yet"
 ```
 
+Image resolution (task I.2): a backend that can tell which image a sandbox
+runs also implements `ImageResolver`.
+
+```go
+type ImageResolver interface {
+	// ImageID returns "sha256:<hex>", the image sandbox h was created from.
+	ImageID(ctx context.Context, h Handle) (string, error)
+}
+func ShortImageID(id string) string // "sha256:" + first 12 hex; other strings unchanged
+```
+
+`docker.Backend` uses `ContainerInspect(h).Image` (the image the container
+really uses, even if the tag moved). An unknown container gives `ErrNotFound`.
+`sandboxtest.Pausable` returns `"sha256:fake-" + spec.Image`; its field
+`ImageIDErr` forces a failure.
+
 Test double: `sandboxtest.Pausable` (in memory; also has `Live`,
 `FindByRunID`, `Close`).
 
@@ -1015,6 +1032,8 @@ JSON report (with run ids), not as events.
 | 0.11.1 | new file `plugin.proto` | `HookService`, `ToolCallInfo`, `PreToolRequest/Response`, `PostToolRequest/Response` | — |
 | Q.3 | `RunStarted` | `string forked_from_run_id` | 7 |
 | Q.3 | `RunStarted` | `uint32 forked_at_step` | 8 |
+| I.1 | `RunStarted` | `SandboxImage sandbox_image` | 9 |
+| I.1 | new message | `SandboxImage { string ref = 1; string id = 2; }` | — |
 
 Every addition is additive; `make proto-breaking` must pass. Before taking a
 number, check this table and the `.proto` file; add your row here in the same PR.
@@ -1125,6 +1144,7 @@ type Gate struct { MinPassAt1 float64; MaxMedianUSDMicros int64 } // < 0 = no co
 type Promotion struct {
 	Name string; Version int; Env Env; ReportPath string
 	PassAt1 float64; Runs int; MedianUSDMicros int64; PromotedAt time.Time
+	ImageID string; ResultsWithoutImage, ResultsChecked int // Promote refuses results (Error == "") on 2+ images
 }
 func (s *Store) Promote(ctx context.Context, name string, version int, env Env,
 	rep evals.Report, reportPath string, g Gate) (Promotion, error)

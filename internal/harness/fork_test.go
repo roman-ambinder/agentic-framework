@@ -307,3 +307,25 @@ func TestForkOfPlannedRunKeepsPlanAndDoesNotReplan(t *testing.T) {
 		t.Fatalf("last model call = %v, want m2 at step 2", next)
 	}
 }
+
+func TestForkRecordsSandboxImage(t *testing.T) {
+	tests := []struct {
+		name string
+		img  *adlcv1.SandboxImage
+	}{
+		{"set", &adlcv1.SandboxImage{Ref: "golang:1.26", Id: "sha256:abc"}},
+		{"nil", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, _ := forkOrigin(t)
+			cfg := forkCfg()
+			cfg.SandboxImage = tt.img
+			forkOK(t, store, cfg, 1, textTurn("x"))
+			got := readAll(t, store, "f1")[0].GetRunStarted().GetSandboxImage()
+			if !proto.Equal(got, tt.img) {
+				t.Fatalf("sandbox_image = %v, want %v", got, tt.img)
+			}
+		})
+	}
+}

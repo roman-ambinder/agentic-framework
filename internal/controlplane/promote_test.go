@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/roman-ambinder/agentic-framework/internal/agentconfig"
@@ -148,5 +149,93 @@ func TestPromoteLatestWins(t *testing.T) {
 	v1, _ := s.Version(ctx, "hello", 1)
 	if len(v1.Envs) != 0 {
 		t.Errorf("Version(1).Envs = %v, want empty", v1.Envs)
+	}
+}
+
+func onImage(r evals.Result, id string) evals.Result {
+	r.ImageID = id
+	return r
+}
+
+const (
+	imgA = "sha256:aaaaaaaaaaaa1111111111111111111111111111111111111111111111111111"
+	imgB = "sha256:bbbbbbbbbbbb2222222222222222222222222222222222222222222222222222"
+)
+
+func TestPromoteImageRule(t *testing.T) {
+	tests := []struct {
+		name        string
+		results     func(d string) []evals.Result
+		wantErr     string
+		wantImage   string
+		wantNoImage int
+	}{
+		{"one image", func(d string) []evals.Result {
+			return []evals.Result{onImage(solved(d, 0), imgA), onImage(solved(d, 0), imgA)}
+		}, "", imgA, 0},
+		{"two images", func(d string) []evals.Result {
+			return []evals.Result{onImage(solved(d, 0), imgA), onImage(solved(d, 0), imgB)}
+		}, "used 2 images (sha256:aaaaaaaaaaaa, sha256:bbbbbbbbbbbb)", "", 0},
+		{"errored result without image is ignored", func(d string) []evals.Result {
+			return []evals.Result{onImage(solved(d, 0), imgA), errored(d), onImage(errored(d), imgB)}
+		}, "", imgA, 0},
+		{"some results without image", func(d string) []evals.Result {
+			return []evals.Result{onImage(solved(d, 0), imgA), solved(d, 0)}
+		}, "", imgA, 1},
+		{"old report without ids", func(d string) []evals.Result {
+			return []evals.Result{solved(d, 0), solved(d, 0)}
+		}, "", "", 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, a := promoteEnv(t)
+			p, err := s.Promote(context.Background(), "hello", 1, EnvStaging, report(tt.results(a.Digest())...), "r.json", noCostLimit)
+			if tt.wantErr != "" {
+				if !errors.Is(err, ErrPromotionRefused) || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want refusal containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.ImageID != tt.wantImage || p.ResultsWithoutImage != tt.wantNoImage {
+				t.Errorf("ImageID %q, ResultsWithoutImage %d; want %q, %d", p.ImageID, p.ResultsWithoutImage, tt.wantImage, tt.wantNoImage)
+			}
+		})
+	}
+}
+
+func TestPromoteRecordsImageID(t *testing.T) {
+	s, a := promoteEnv(t)
+	d := a.Digest()
+	if _, err := s.Promote(context.Background(), "hello", 1, EnvStaging, report(onImage(solved(d, 0), imgA)), "r.json", noCostLimit); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := s.db.QueryRow(`SELECT image_id FROM promotions WHERE name = 'hello'`).Scan(&got); err != nil || got != imgA {
+		t.Fatalf("image_id = %q, %v; want %q", got, err, imgA)
+	}
+}
+
+func TestPromoteResultsCheckedCountsAllProviders(t *testing.T) {
+	s, a := promoteEnv(t)
+	d := a.Digest()
+	var rs []evals.Result
+	for _, prov := range []string{"p1", "p2"} {
+		for range 3 {
+			r := solved(d, 0)
+			r.Provider = prov
+			rs = append(rs, r)
+		}
+	}
+	rs = append(rs, errored(d))
+	rs[0].ImageID = imgA
+	p, err := s.Promote(context.Background(), "hello", 1, EnvStaging, report(rs...), "r.json", noCostLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ResultsWithoutImage != 5 || p.ResultsChecked != 6 {
+		t.Errorf("ResultsWithoutImage %d, ResultsChecked %d; want 5, 6", p.ResultsWithoutImage, p.ResultsChecked)
 	}
 }

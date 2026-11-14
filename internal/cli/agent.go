@@ -16,6 +16,7 @@ import (
 
 	"github.com/roman-ambinder/agentic-framework/internal/agentconfig"
 	"github.com/roman-ambinder/agentic-framework/internal/controlplane"
+	"github.com/roman-ambinder/agentic-framework/internal/sandbox"
 )
 
 func newAgentCmd() *cobra.Command {
@@ -222,5 +223,19 @@ func promoteAgent(ctx context.Context, controlDB string, o promoteOptions, arg s
 	}
 	fmt.Fprintf(w, "promoted %s@%d to %s (pass@1 %.3f over %d runs, median $%s)\n",
 		p.Name, p.Version, p.Env, p.PassAt1, p.Runs, formatUSD(p.MedianUSDMicros))
+	printPromotionImage(w, p)
 	return nil
+}
+
+// printPromotionImage prints the image the promotion's evidence ran on, or a
+// warning when the report does not say.
+func printPromotionImage(w io.Writer, p controlplane.Promotion) {
+	if p.ImageID == "" {
+		fmt.Fprintln(w, "warning: the report does not say which image the results used")
+		return
+	}
+	fmt.Fprintf(w, "image: %s\n", sandbox.ShortImageID(p.ImageID))
+	if p.ResultsWithoutImage > 0 {
+		fmt.Fprintf(w, "warning: %d of %d results do not say which image they used\n", p.ResultsWithoutImage, p.ResultsChecked)
+	}
 }

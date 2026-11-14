@@ -5,6 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
+
+	adlcv1 "github.com/roman-ambinder/agentic-framework/gen/go/adlc/v1"
+	"github.com/roman-ambinder/agentic-framework/internal/evals"
 )
 
 const miniSuite = "../evals/testdata/suites/mini"
@@ -109,5 +114,25 @@ func TestEvalRepeatOutOfRange(t *testing.T) {
 		if code != 1 || !strings.Contains(stderr, "eval: --repeat must be between 1 and 20") {
 			t.Errorf("--repeat %s: code = %d, stderr = %q", n, code, stderr)
 		}
+	}
+}
+
+func TestEvalSandboxImage(t *testing.T) {
+	tests := []struct {
+		name string
+		in   evals.AgentRun
+		want *adlcv1.SandboxImage
+	}{
+		{"empty ref", evals.AgentRun{ImageID: "sha256:abc"}, nil},
+		{"ref and id", evals.AgentRun{ImageRef: "golang:1.26", ImageID: "sha256:abc"}, &adlcv1.SandboxImage{Ref: "golang:1.26", Id: "sha256:abc"}},
+		{"ref only", evals.AgentRun{ImageRef: "golang:1.26"}, &adlcv1.SandboxImage{Ref: "golang:1.26"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evalSandboxImage(tt.in)
+			if !proto.Equal(got, tt.want) || (got == nil) != (tt.want == nil) {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

@@ -141,6 +141,32 @@ type Suspender interface {
 	Restore(ctx context.Context, spec Spec, snap Snapshot) (Handle, error)
 }
 
+// ImageResolver is implemented by backends that can tell which image a
+// sandbox runs.
+type ImageResolver interface {
+	// ImageID returns the content ID ("sha256:<hex>") of the image the
+	// sandbox h was created from. The ID must be usable as Spec.Image for
+	// the same backend: the eval runner creates the grading sandbox from it.
+	ImageID(ctx context.Context, h Handle) (string, error)
+}
+
+// ShortImageID shortens an image ID of the form "sha256:" plus 64 hex
+// characters to "sha256:" plus its first 12. Any other string is returned
+// unchanged.
+func ShortImageID(id string) string {
+	const prefix = "sha256:"
+	hexPart, ok := strings.CutPrefix(id, prefix)
+	if !ok || len(hexPart) != 64 {
+		return id
+	}
+	for _, c := range hexPart {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return id
+		}
+	}
+	return prefix + hexPart[:12]
+}
+
 // CapOutput returns b unchanged if len(b) <= max, otherwise the first max
 // bytes followed by TruncatedMarker.
 func CapOutput(b []byte, max int) []byte {

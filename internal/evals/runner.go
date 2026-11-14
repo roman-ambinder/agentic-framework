@@ -34,6 +34,9 @@ type AgentRun struct {
 	Bug     Bug
 	Sandbox sandbox.Sandbox
 	Handle  sandbox.Handle // sandbox whose /workspace holds the buggy repo
+	// ImageRef is the image reference the sandbox was created from; ImageID is
+	// its content ID ("" when the backend cannot tell).
+	ImageRef, ImageID string
 }
 
 // Runner runs bugs through agents.
@@ -66,7 +69,8 @@ type Result struct {
 	ChangedFiles []string           `json:"changed_files"`   // relative paths, sorted
 	Error        string             `json:"error,omitempty"` // infrastructure failure; Hidden is then empty
 	DurationMS   int64              `json:"duration_ms"`
-	State        *eventlog.RunState `json:"-"` // for gradeOf
+	ImageID      string             `json:"image_id,omitempty"` // content ID of the sandbox image ("sha256:..."); "" if unknown
+	State        *eventlog.RunState `json:"-"`                  // for gradeOf
 }
 
 // Solved reports whether the run was graded and the grade is solved.
@@ -159,8 +163,12 @@ func (res *Result) run(ctx context.Context, r *Runner, bug Bug, agent *agentconf
 		return
 	}
 	defer r.destroy(ctx, h)
+	res.ImageID = r.imageID(ctx, h)
 
-	state, err := r.RunAgent(ctx, AgentRun{RunID: res.RunID, Agent: agent, Bug: bug, Sandbox: r.Sandbox, Handle: h})
+	state, err := r.RunAgent(ctx, AgentRun{
+		RunID: res.RunID, Agent: agent, Bug: bug, Sandbox: r.Sandbox, Handle: h,
+		ImageRef: image, ImageID: res.ImageID,
+	})
 	if state != nil {
 		res.State = state
 		res.StopReason = state.StopReason.String()
@@ -179,6 +187,9 @@ func (res *Result) run(ctx context.Context, r *Runner, bug Bug, agent *agentconf
 		return
 	}
 	res.ChangedFiles = r.changedFiles(ctx, bug, filepath.Join(before, ".git"), after)
+	if res.ImageID != "" {
+		spec.Image = res.ImageID // grade in exactly the image the agent ran in
+	}
 	var checks outcomeChecks
 	res.Hidden, checks, err = r.grade(ctx, spec, bug, after)
 	if err != nil {
@@ -187,6 +198,21 @@ func (res *Result) run(ctx context.Context, r *Runner, bug Bug, agent *agentconf
 	}
 	g := gradeOf(*res, checks)
 	res.Grade = &g
+}
+
+// imageID reads the content ID of the image h runs. A backend that cannot, or
+// a failed read, gives "": it never fails the eval.
+func (r *Runner) imageID(ctx context.Context, h sandbox.Handle) string {
+	ir, ok := r.Sandbox.(sandbox.ImageResolver)
+	if !ok {
+		return ""
+	}
+	id, err := ir.ImageID(ctx, h)
+	if err != nil {
+		r.logf("read image id of %s: %v", h.ID, err)
+		return ""
+	}
+	return id
 }
 
 // destroy removes a sandbox even when ctx is cancelled.

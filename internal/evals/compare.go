@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/roman-ambinder/agentic-framework/internal/sandbox"
 )
 
 // AgentPair is a base agent id compared with a new agent id.
@@ -18,10 +20,11 @@ type AgentPair struct {
 
 // ReportInfo describes one input report.
 type ReportInfo struct {
-	Path    string `json:"path"` // set by the caller; Compare leaves it empty
-	Suite   string `json:"suite"`
-	Results int    `json:"results"`
-	Repeat  int    `json:"repeat"` // Report.Repeat, 0 read as 1
+	Path    string   `json:"path"` // set by the caller; Compare leaves it empty
+	Suite   string   `json:"suite"`
+	Results int      `json:"results"`
+	Repeat  int      `json:"repeat"`           // Report.Repeat, 0 read as 1
+	Images  []string `json:"images,omitempty"` // sorted unique non-empty Result.ImageID values
 }
 
 // CompareRow is one difficulty, or "all", of one pair.
@@ -147,7 +150,19 @@ func matchAgents(baseIDs, newIDs []string, mapping []AgentPair) ([]AgentPair, er
 }
 
 func infoOf(r Report) ReportInfo {
-	return ReportInfo{Suite: r.Suite, Results: len(r.Results), Repeat: max(1, r.Repeat)}
+	return ReportInfo{Suite: r.Suite, Results: len(r.Results), Repeat: max(1, r.Repeat), Images: imagesOf(r.Results)}
+}
+
+// imagesOf returns the distinct non-empty image ids of results, sorted; nil when there are none.
+func imagesOf(results []Result) []string {
+	var ids []string
+	for _, r := range results {
+		if r.ImageID != "" && !slices.Contains(ids, r.ImageID) {
+			ids = append(ids, r.ImageID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // Compare matches the agents of the two reports and compares each pair.
@@ -280,6 +295,9 @@ func PrintComparison(w io.Writer, c Comparison) {
 	if c.Base.Suite != c.New.Suite {
 		fmt.Fprintln(w, "warning: the reports are from different suites")
 	}
+	for _, line := range imageWarnings(c) {
+		fmt.Fprintln(w, line)
+	}
 	if len(c.BaseOnlyAgents) > 0 {
 		fmt.Fprintf(w, "only in base: %s\n", strings.Join(c.BaseOnlyAgents, ", "))
 	}
@@ -289,6 +307,31 @@ func PrintComparison(w io.Writer, c Comparison) {
 	for _, p := range c.Pairs {
 		printPair(w, p)
 	}
+}
+
+// imageWarnings returns the warnings about the sandbox images of the two reports.
+func imageWarnings(c Comparison) []string {
+	var out []string
+	if len(c.Base.Images) > 0 && len(c.New.Images) > 0 && !slices.Equal(c.Base.Images, c.New.Images) {
+		out = append(out, fmt.Sprintf("warning: the reports used different images: base %s, new %s",
+			shortIDs(c.Base.Images), shortIDs(c.New.Images)))
+	}
+	if len(c.Base.Images) > 1 {
+		out = append(out, "warning: base report mixes images: "+shortIDs(c.Base.Images))
+	}
+	if len(c.New.Images) > 1 {
+		out = append(out, "warning: new report mixes images: "+shortIDs(c.New.Images))
+	}
+	return out
+}
+
+// shortIDs returns the short form of each image id, joined with ", ".
+func shortIDs(ids []string) string {
+	short := make([]string, len(ids))
+	for i, id := range ids {
+		short[i] = sandbox.ShortImageID(id)
+	}
+	return strings.Join(short, ", ")
 }
 
 func printPair(w io.Writer, p PairComparison) {

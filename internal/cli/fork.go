@@ -89,7 +89,7 @@ func forkAgentWith(ctx context.Context, o forkOptions, originID string, stdout i
 		return &exitError{code: 1, err: err}
 	}
 	defer closeKS()
-	sb, err := startRunSandbox(ctx, a, runID, openSandbox)
+	sb, err := startRunSandbox(ctx, a, runID, openSandbox, stdout)
 	if err != nil {
 		return &exitError{code: 1, err: err}
 	}
@@ -103,6 +103,7 @@ func forkAgentWith(ctx context.Context, o forkOptions, originID string, stdout i
 		return &exitError{code: 1, err: err}
 	}
 	defer func() { _ = cleanup() }()
+	cfg.SandboxImage = sb.imageOrNil()
 	deps.KillSwitch = ks
 	state, err := harness.Fork(ctx, cfg, deps, harness.ForkPoint{RunID: originID, AtStep: o.atStep})
 	if err != nil {

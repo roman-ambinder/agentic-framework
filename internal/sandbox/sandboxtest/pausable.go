@@ -21,6 +21,8 @@ type Pausable struct {
 	Images map[string]bool
 	// SuspendErr and RestoreErr, when set, make Suspend and Restore fail.
 	SuspendErr, RestoreErr error
+	// ImageIDErr, when set, makes ImageID fail.
+	ImageIDErr error
 
 	mu      sync.Mutex
 	next    int
@@ -30,8 +32,9 @@ type Pausable struct {
 }
 
 var (
-	_ sandbox.Sandbox   = (*Pausable)(nil)
-	_ sandbox.Suspender = (*Pausable)(nil)
+	_ sandbox.Sandbox       = (*Pausable)(nil)
+	_ sandbox.Suspender     = (*Pausable)(nil)
+	_ sandbox.ImageResolver = (*Pausable)(nil)
 )
 
 // Create stores spec and returns a new handle.
@@ -132,6 +135,21 @@ func (p *Pausable) Restore(_ context.Context, spec sandbox.Spec, snap sandbox.Sn
 		return sandbox.Handle{}, fmt.Errorf("sandboxtest: %s: %w", snap.ImageID, sandbox.ErrImageGone)
 	}
 	return p.createLocked(spec), nil
+}
+
+// ImageID returns "sha256:fake-" plus the image of the spec h was created
+// with; a destroyed or unknown handle is ErrNotFound.
+func (p *Pausable) ImageID(_ context.Context, h sandbox.Handle) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ImageIDErr != nil {
+		return "", p.ImageIDErr
+	}
+	spec, err := p.liveLocked(h)
+	if err != nil {
+		return "", err
+	}
+	return "sha256:fake-" + spec.Image, nil
 }
 
 // Live returns the handles that are not destroyed, in creation order.

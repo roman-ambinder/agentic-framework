@@ -15,6 +15,7 @@ import (
 	adlcv1 "github.com/roman-ambinder/agentic-framework/gen/go/adlc/v1"
 	"github.com/roman-ambinder/agentic-framework/internal/agentconfig"
 	"github.com/roman-ambinder/agentic-framework/internal/eventlog"
+	"github.com/roman-ambinder/agentic-framework/internal/sandbox"
 	"github.com/roman-ambinder/agentic-framework/internal/sandbox/sandboxtest"
 )
 
@@ -311,5 +312,67 @@ func TestRunOneIsAttemptOne(t *testing.T) {
 	res := env.r.RunOne(context.Background(), env.bug, testAgent(t, "first", "anthropic"))
 	if res.Attempt != 1 || regexp.MustCompile(`-a[0-9]+$`).MatchString(res.RunID) {
 		t.Errorf("attempt %d run id %q", res.Attempt, res.RunID)
+	}
+}
+
+// imageSandbox wraps a sandbox, records every Create spec and answers
+// sandbox.ImageResolver.
+type imageSandbox struct {
+	sandbox.Sandbox
+	id    string
+	err   error
+	specs []sandbox.Spec
+}
+
+func (s *imageSandbox) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Handle, error) {
+	s.specs = append(s.specs, spec)
+	return s.Sandbox.Create(ctx, spec)
+}
+
+func (s *imageSandbox) ImageID(context.Context, sandbox.Handle) (string, error) { return s.id, s.err }
+
+const testImageID = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func TestResultRecordsImageID(t *testing.T) {
+	var got AgentRun
+	env := newRunnerEnv(t, func(ctx context.Context, ar AgentRun) (*eventlog.RunState, error) {
+		got = ar
+		return fixing(ctx, ar)
+	})
+	env.r.Sandbox = &imageSandbox{Sandbox: env.host, id: testImageID}
+	res := env.r.RunOne(context.Background(), env.bug, testAgent(t, "coder", "anthropic"))
+	if res.ImageID != testImageID {
+		t.Errorf("ImageID = %q, want %q", res.ImageID, testImageID)
+	}
+	if got.ImageID != testImageID || got.ImageRef != DefaultImage {
+		t.Errorf("AgentRun image = %q / %q", got.ImageRef, got.ImageID)
+	}
+}
+
+func TestResultImageIDFailureLeavesEmpty(t *testing.T) {
+	env := newRunnerEnv(t, fixing)
+	env.r.Sandbox = &imageSandbox{Sandbox: env.host, err: errors.New("boom")}
+	res := env.r.RunOne(context.Background(), env.bug, testAgent(t, "coder", "anthropic"))
+	if res.ImageID != "" || res.Error != "" || res.Grade == nil {
+		t.Errorf("ImageID = %q, Error = %q, Grade = %v", res.ImageID, res.Error, res.Grade)
+	}
+	if !strings.Contains(env.out.String(), "read image id of") {
+		t.Errorf("no log line: %q", env.out.String())
+	}
+}
+
+func TestGradeSandboxUsesResolvedImageID(t *testing.T) {
+	env := newRunnerEnv(t, fixing)
+	sb := &imageSandbox{Sandbox: env.host, id: testImageID}
+	env.r.Sandbox = sb
+	res := env.r.RunOne(context.Background(), env.bug, testAgent(t, "coder", "anthropic"))
+	if len(sb.specs) != 2 {
+		t.Fatalf("Create calls = %d, want 2", len(sb.specs))
+	}
+	if sb.specs[0].Image != DefaultImage {
+		t.Errorf("first Image = %q, want %q", sb.specs[0].Image, DefaultImage)
+	}
+	if sb.specs[1].Image != res.ImageID || res.ImageID == "" {
+		t.Errorf("grade Image = %q, want %q", sb.specs[1].Image, res.ImageID)
 	}
 }

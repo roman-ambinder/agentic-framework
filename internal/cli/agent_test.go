@@ -21,7 +21,9 @@ func writeAgentReport(t *testing.T, agent string, results ...evals.Result) strin
 	}
 	for i := range results {
 		results[i].AgentDigest = a.Digest()
-		results[i].Provider = "fake"
+		if results[i].Provider == "" {
+			results[i].Provider = "fake"
+		}
 		results[i].Difficulty = evals.Easy
 	}
 	path := filepath.Join(t.TempDir(), "report.json")
@@ -122,7 +124,7 @@ func TestAgentPromoteCommand(t *testing.T) {
 	cdb := registerHello(t, agent)
 	rep := writeAgentReport(t, agent, solvedResult(10000))
 	code, out, e := runCLI("agent", "promote", "hello@1", "--to", "staging", "--report", rep, "--control-db", cdb)
-	want := "promoted hello@1 to staging (pass@1 1.000 over 1 runs, median $0.010000)\n"
+	want := "promoted hello@1 to staging (pass@1 1.000 over 1 runs, median $0.010000)\nwarning: the report does not say which image the results used\n"
 	if code != 0 || out != want {
 		t.Fatalf("%d %q %q", code, out, e)
 	}
@@ -261,5 +263,69 @@ func TestApproveRegisteredVersion(t *testing.T) {
 	}
 	if b, err := os.ReadFile(e.workspaceFile()); err != nil || string(b) != "hi" {
 		t.Fatalf("out.txt = %q, %v", b, err)
+	}
+}
+
+func TestAgentPromotePrintsImage(t *testing.T) {
+	const img = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	tests := []struct {
+		name    string
+		results []evals.Result
+		want    string
+	}{
+		{
+			"all on one image",
+			[]evals.Result{{ImageID: img, Grade: &evals.Grade{Solved: true}}},
+			"image: sha256:0123456789ab\n",
+		},
+		{
+			"some without image",
+			[]evals.Result{{ImageID: img, Grade: &evals.Grade{Solved: true}}, {Grade: &evals.Grade{Solved: true}}},
+			"image: sha256:0123456789ab\nwarning: 1 of 2 results do not say which image they used\n",
+		},
+		{
+			"no image at all",
+			[]evals.Result{{Grade: &evals.Grade{Solved: true}}},
+			"warning: the report does not say which image the results used\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agent, _, _ := helloDir(t, "")
+			cdb := registerHello(t, agent)
+			rep := writeAgentReport(t, agent, tt.results...)
+			code, out, e := runCLI("agent", "promote", "hello@1", "--to", "staging", "--report", rep, "--control-db", cdb)
+			if code != 0 || !strings.HasSuffix(out, "\n"+tt.want) {
+				t.Fatalf("%d %q %q", code, out, e)
+			}
+		})
+	}
+}
+
+func TestAgentPromoteImageWarningCountsAllProviders(t *testing.T) {
+	agent, _, _ := helloDir(t, "")
+	cdb := registerHello(t, agent)
+	var rs []evals.Result
+	for _, prov := range []string{"p1", "p2"} {
+		for range 3 {
+			rs = append(rs, evals.Result{Provider: prov, Grade: &evals.Grade{Solved: true}})
+		}
+	}
+	rep := writeAgentReport(t, agent, rs...)
+	code, out, e := runCLI("agent", "promote", "hello@1", "--to", "staging", "--report", rep, "--control-db", cdb)
+	if code != 0 || !strings.Contains(out, "warning: the report does not say which image the results used\n") {
+		t.Fatalf("%d %q %q", code, out, e)
+	}
+	rs = nil
+	for _, prov := range []string{"p1", "p2"} {
+		for range 3 {
+			rs = append(rs, evals.Result{Provider: prov, Grade: &evals.Grade{Solved: true}})
+		}
+	}
+	rs[0].ImageID = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	rep = writeAgentReport(t, agent, rs...)
+	code, out, e = runCLI("agent", "promote", "hello@1", "--to", "prod", "--report", rep, "--control-db", cdb)
+	if code != 0 || !strings.HasSuffix(out, "warning: 5 of 6 results do not say which image they used\n") {
+		t.Fatalf("%d %q %q", code, out, e)
 	}
 }

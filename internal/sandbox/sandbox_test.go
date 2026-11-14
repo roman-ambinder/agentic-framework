@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -71,5 +72,27 @@ func TestExpandArgs(t *testing.T) {
 	}
 	if in[1] != "{{sandbox_id}}" || in[2] != "x={{sandbox_id}}" {
 		t.Fatalf("input slice was modified: %q", in)
+	}
+}
+
+func TestShortImageID(t *testing.T) {
+	hex64 := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	tests := []struct {
+		name, in, want string
+	}{
+		{"full sha256 id", "sha256:" + hex64, "sha256:0123456789ab"},
+		{"already short", "sha256:0123456789ab", "sha256:0123456789ab"},
+		{"wrong length", "sha256:" + hex64 + "00", "sha256:" + hex64 + "00"},
+		{"non hex", "sha256:" + strings.Repeat("z", 64), "sha256:" + strings.Repeat("z", 64)},
+		{"other prefix", "sha512:" + hex64, "sha512:" + hex64},
+		{"plain ref", "golang:1.26", "golang:1.26"},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ShortImageID(tt.in); got != tt.want {
+				t.Fatalf("ShortImageID(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }
