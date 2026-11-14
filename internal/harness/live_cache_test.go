@@ -52,12 +52,22 @@ func TestLiveCacheReadsAcrossSteps(t *testing.T) {
 	cfg.Model = modelID
 	store := newLog(t)
 	deps := Deps{Log: store, Model: anthropic.New(anthropic.Options{}), Tools: router, Policy: policy.AllowAll{}}
-	if _, err := Run(context.Background(), cfg, deps); err != nil {
+	st, err := Run(context.Background(), cfg, deps)
+	if err != nil {
 		t.Fatal(err)
 	}
 	events, err := store.Read(context.Background(), cfg.RunID, 0)
 	if err != nil {
 		t.Fatal(err)
+	}
+	t.Logf("stop %v %q, result %q", st.StopReason, st.StopDetail, st.Result)
+	for _, ev := range events {
+		if e := ev.GetErrorOccurred(); e != nil {
+			t.Logf("error_occurred: %s: %s", e.GetComponent(), e.GetMessage())
+		}
+		if f := ev.GetModelCallFailed(); f != nil {
+			t.Logf("model_call_failed: %v", f)
+		}
 	}
 	var costs []*adlcv1.Cost
 	for _, ev := range events {
