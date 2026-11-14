@@ -135,6 +135,7 @@ func newApproveCmd() *cobra.Command {
 	f.StringVar(&o.controlDB, "control-db", defaultControlDBPath, "control database (kill switches)")
 	f.StringVar(&o.fakeScript, "fake-script", "", "fake model script (provider fake only)")
 	f.StringVar(&o.modelName, "model-name", "", "overrides model.name from the agent file")
+	addWorkspaceFlags(cmd, &o.runOptions)
 	return cmd
 }
 
@@ -221,6 +222,9 @@ func continueRun(ctx context.Context, o approveOptions, store *eventlog.Store, r
 		return nil, err
 	}
 	defer closeKS()
+	if err := checkAgentVersion(ctx, store, runID, a); err != nil {
+		return nil, err
+	}
 	sb, err := attachSandbox(ctx, a, runID, sandboxSource{open: openSandbox, store: store, dbDir: filepath.Dir(o.db)}, stdout)
 	if err != nil {
 		return nil, err

@@ -21,6 +21,15 @@ func snapshotPath(dbPath, runID string, seq uint64) string {
 	return filepath.Join(filepath.Dir(dbPath), "snapshots", runID, fmt.Sprintf("%d.tar", seq))
 }
 
+// removeSnapshots deletes every snapshot tar of runID: called once the run
+// no longer waits for approval and its workspace has been copied out.
+func removeSnapshots(dbPath, runID string) error {
+	if err := os.RemoveAll(filepath.Join(filepath.Dir(dbPath), "snapshots", runID)); err != nil {
+		return fmt.Errorf("cli: remove snapshots: %w", err)
+	}
+	return nil
+}
+
 // pendingSnapshot returns the run's latest sandbox_suspended if no later
 // sandbox_restored names it. SnapshotRef is relative to dbDir; the returned
 // TarPath is absolute. The fold keeps no such field (it would change every
@@ -113,7 +122,8 @@ func appendRestored(ctx context.Context, store *eventlog.Store, runID string, su
 
 // suspend saves /workspace of a run that waits for approval and records it.
 // If Suspend fails the container is kept and nothing is appended. If the
-// record fails after Suspend, the container is gone and an error names the tar.
+// record fails after Suspend, the sandbox is restored from the tar
+// (restoreUnrecorded).
 func (s *runSandbox) suspend(ctx context.Context, o runOptions, store *eventlog.Store, state *eventlog.RunState, stdout io.Writer) error {
 	bg := context.WithoutCancel(ctx)
 	tar := snapshotPath(o.db, s.runID, state.LastSeq+1)
@@ -124,13 +134,28 @@ func (s *runSandbox) suspend(ctx context.Context, o runOptions, store *eventlog.
 		return nil
 	}
 	if err := appendSuspended(bg, store, s.runID, snap, filepath.Dir(o.db)); err != nil {
-		return fmt.Errorf("run: sandbox saved to %s but not recorded: %w", snap.TarPath, err)
+		return s.restoreUnrecorded(bg, snap, err, stdout)
 	}
 	if snap.ProcessesSkipped == "" {
 		fmt.Fprint(stdout, "sandbox: paused (files + processes)\n")
 	} else {
 		fmt.Fprintf(stdout, "sandbox: paused (files only: %s)\n", snap.ProcessesSkipped)
 	}
+	return nil
+}
+
+// restoreUnrecorded brings the sandbox back from snap after its pause could
+// not be recorded (recordErr), so the run keeps a live container as when
+// Suspend fails. If that fails too, the error names the tar and how to
+// extract it: no event points at it.
+func (s *runSandbox) restoreUnrecorded(ctx context.Context, snap sandbox.Snapshot, recordErr error, stdout io.Writer) error {
+	h, err := s.backend.Restore(ctx, s.spec, snap)
+	if err != nil {
+		return fmt.Errorf("run: sandbox saved to %s but not recorded (%w) and not restored: %w; recover the files with: tar -xf %s",
+			snap.TarPath, recordErr, err, snap.TarPath)
+	}
+	s.handle = h
+	fmt.Fprintf(stdout, "sandbox: pause not recorded (%v); restored %s and kept it for resume\n", recordErr, shortSandboxID(h.ID))
 	return nil
 }
 

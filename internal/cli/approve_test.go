@@ -307,17 +307,11 @@ func TestApproveFailsWhenSnapshotMissing(t *testing.T) {
 
 func TestApproveFailureAfterRestorePausesAgain(t *testing.T) {
 	e := pausableRun(t, "", &sandboxtest.Pausable{})
-	yml, err := os.ReadFile(e.agent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A different agent version passes the restore but makes harness.Approve fail.
-	if err := os.WriteFile(e.agent, []byte(strings.Replace(string(yml), "version: 1", "version: 2", 1)), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	out, err := approveWith(t, e, "a-call_1", approveScript)
+	// An unreadable model script passes the restore but makes building the
+	// run fail, after the sandbox was restored.
+	out, err := approveWith(t, e, "a-call_1", "{not json")
 	var ee *exitError
-	if !errors.As(err, &ee) || ee.code != 1 || !errors.Is(err, harness.ErrAgentMismatch) {
+	if !errors.As(err, &ee) || ee.code != 1 {
 		t.Fatalf("err = %v", err)
 	}
 	if !strings.Contains(out, restoredLine("fake-2")) || !strings.Contains(out, "sandbox: paused (files only: ") {

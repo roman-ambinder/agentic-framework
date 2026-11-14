@@ -1176,3 +1176,10 @@ The complete lists of Q.1 and Q.2 names are in §9; the lines below are a summar
 
 All changes are additive, but run these tasks one after another (or merge
 carefully) rather than in parallel on the same files.
+
+**Sandbox pause follow-ups (F.1–F.5).** `adlc approve` and `adlc resume`
+take `--workspace-out` and `--keep-sandbox` (registered by
+`addWorkspaceFlags`, same text as `adlc run`); both refuse with
+`harness.ErrAgentMismatch` before any sandbox is restored
+(`checkAgentVersion`). A finished run's `.adlc/snapshots/<run>/` is deleted
+after its workspace is copied out.

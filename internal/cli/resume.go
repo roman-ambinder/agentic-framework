@@ -65,6 +65,7 @@ func newResumeCmd() *cobra.Command {
 	f.StringVar(&o.controlDB, "control-db", defaultControlDBPath, "control database (kill switches)")
 	f.StringVar(&o.fakeScript, "fake-script", "", "fake model script (provider fake only)")
 	f.StringVar(&o.modelName, "model-name", "", "overrides model.name from the agent file")
+	addWorkspaceFlags(cmd, &o)
 	return cmd
 }
 
@@ -102,6 +103,9 @@ func resumeAgent(ctx context.Context, o runOptions, runID string, stdout io.Writ
 	}
 	defer store.Close()
 	if err := checkResumable(ctx, store, runID); err != nil {
+		return &exitError{code: 1, err: err}
+	}
+	if err := checkAgentVersion(ctx, store, runID, a); err != nil {
 		return &exitError{code: 1, err: err}
 	}
 	ks, closeKS, err := openKillSwitch(ctx, o.controlDB)
@@ -175,8 +179,10 @@ type sandboxSource struct {
 // attachSandbox gives a continued run its sandbox and puts the sandbox id
 // into the tool commands. A run whose sandbox was suspended is restored from
 // its latest snapshot. Otherwise, for an agent whose tools name the
-// placeholder, the live container is found and probed. It returns nil, nil
-// when there is nothing to attach.
+// placeholder, the live container is found and probed; for one with a
+// sandbox section but no placeholder, a kept container is attached if one is
+// live (so finish copies it out and destroys it). It returns nil, nil when
+// there is nothing to attach.
 func attachSandbox(ctx context.Context, a *agentconfig.Agent, runID string, src sandboxSource, stdout io.Writer) (*runSandbox, error) {
 	spec, hasSpec := a.SandboxSpec(runID)
 	if !hasSpec && !usesSandbox(a) {
@@ -189,29 +195,66 @@ func attachSandbox(ctx context.Context, a *agentconfig.Agent, runID string, src 
 	if pending && !hasSpec {
 		return nil, fmt.Errorf("resume: run %q has a saved sandbox (%s) but the agent file has no sandbox section", runID, snap.TarPath)
 	}
-	if !pending && !usesSandbox(a) {
-		return nil, nil
-	}
 	b, err := src.open(ctx)
 	if err != nil {
+		if !pending && !usesSandbox(a) {
+			// Only a kept container could be attached, and no tool needs it:
+			// without a backend, continue without a sandbox, as before.
+			fmt.Fprintf(stdout, "sandbox: could not look for a kept container: %v\n", err)
+			return nil, nil
+		}
 		return nil, err
 	}
 	var h sandbox.Handle
-	if pending {
+	found := true
+	switch {
+	case pending:
 		h, err = restoreSandbox(ctx, b, src.store, runID, spec, snap, seq, stdout)
-	} else {
+	case usesSandbox(a):
 		h, err = findLiveSandbox(ctx, b, runID)
+	default:
+		h, found, err = findKeptSandbox(ctx, b, runID)
 	}
-	if err != nil {
+	if err != nil || !found {
 		_ = b.Close()
 		return nil, err
 	}
 	expandSandboxID(a, h)
-	return &runSandbox{backend: b, handle: h, runID: runID, suspends: hasSpec && a.Sandbox.Suspends()}, nil
+	return &runSandbox{backend: b, handle: h, runID: runID, suspends: hasSpec && a.Sandbox.Suspends(), spec: spec}, nil
+}
+
+// errSandboxGone matches the error findLiveSandbox returns when the run has
+// no live container.
+var errSandboxGone = errors.New("cli: sandbox is not running")
+
+// sandboxGoneError is findLiveSandbox's "no live container" error; its text
+// is the one users have always seen.
+type sandboxGoneError struct{ runID string }
+
+func (e sandboxGoneError) Error() string {
+	return fmt.Sprintf("sandbox for run %q is not running; its workspace changes cannot be recovered. Start a new run.", e.runID)
+}
+
+// Is makes errors.Is(err, errSandboxGone) true.
+func (e sandboxGoneError) Is(target error) bool { return target == errSandboxGone }
+
+// findKeptSandbox looks for the live container of an agent whose tools do
+// not name the sandbox (so it was only kept, e.g. with `pause: keep`). None,
+// or one that does not answer, is not an error: the run continues without a
+// sandbox, as before. More than one is.
+func findKeptSandbox(ctx context.Context, b sandboxLookup, runID string) (sandbox.Handle, bool, error) {
+	h, err := findLiveSandbox(ctx, b, runID)
+	if err == nil {
+		return h, true, nil
+	}
+	if errors.Is(err, errSandboxGone) {
+		return sandbox.Handle{}, false, nil
+	}
+	return sandbox.Handle{}, false, err
 }
 
 func findLiveSandbox(ctx context.Context, b sandboxLookup, runID string) (sandbox.Handle, error) {
-	gone := fmt.Errorf("sandbox for run %q is not running; its workspace changes cannot be recovered. Start a new run.", runID) //nolint:staticcheck // message is specified by the brief
+	gone := sandboxGoneError{runID: runID}
 	found, err := b.FindByRunID(ctx, runID)
 	switch {
 	case err != nil:
@@ -228,4 +271,17 @@ func findLiveSandbox(ctx context.Context, b sandboxLookup, runID string) (sandbo
 		return sandbox.Handle{}, gone
 	}
 	return found[0], nil
+}
+
+// checkAgentVersion refuses with harness.ErrAgentMismatch when the agent file
+// a is not the version that started runID, before any sandbox is restored.
+func checkAgentVersion(ctx context.Context, store *eventlog.Store, runID string, a *agentconfig.Agent) error {
+	st, err := store.State(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if st.AgentVersion != a.AgentID() {
+		return fmt.Errorf("%w: run has %s, agent file is %s", harness.ErrAgentMismatch, st.AgentVersion, a.AgentID())
+	}
+	return nil
 }
