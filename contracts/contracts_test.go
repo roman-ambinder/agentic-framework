@@ -27,6 +27,13 @@ func samplePayloads() map[string]*adlcv1.Event {
 		"run_resumed": {Payload: &adlcv1.Event_RunResumed{RunResumed: &adlcv1.RunResumed{
 			NextStep: 3, VerifiedCheckpointSeq: 9, AbandonedToolCalls: 1, Reason: "process stopped without run_completed",
 		}}},
+		"sandbox_suspended": {Payload: &adlcv1.Event_SandboxSuspended{SandboxSuspended: &adlcv1.SandboxSuspended{
+			SnapshotRef: "runs/r1/workspace.tar", WorkspaceSha256: "sha256:abc", WorkspaceBytes: 2048,
+			ImageId: "sha256:img", CheckpointId: "cp1", ProcessesSkipped: "",
+		}}},
+		"sandbox_restored": {Payload: &adlcv1.Event_SandboxRestored{SandboxRestored: &adlcv1.SandboxRestored{
+			SuspendedSeq: 7, Processes: true, FallbackCause: "", SandboxId: "box1",
+		}}},
 		"run_completed": {Payload: &adlcv1.Event_RunCompleted{RunCompleted: &adlcv1.RunCompleted{
 			StopReason: adlcv1.StopReason_STOP_REASON_BUDGET_EXHAUSTED, ExhaustedBudget: adlcv1.BudgetKind_BUDGET_KIND_STEPS,
 		}}},

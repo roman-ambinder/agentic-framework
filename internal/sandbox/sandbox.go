@@ -51,7 +51,15 @@ var (
 	ErrInvalidSpec = errors.New("sandbox: invalid spec")
 	// ErrNotFound means the handle does not name a live sandbox.
 	ErrNotFound = errors.New("sandbox: not found")
+	// ErrSnapshotChanged means the snapshot file no longer matches its SHA256.
+	ErrSnapshotChanged = errors.New("sandbox: snapshot file changed")
+	// ErrImageGone means the image a snapshot was taken from no longer exists.
+	ErrImageGone = errors.New("sandbox: snapshot image is gone")
 )
+
+// ProcessesNotSupported is Snapshot.ProcessesSkipped while processes are
+// never kept.
+const ProcessesNotSupported = "process checkpoints are not supported yet"
 
 // Spec describes the sandbox to create.
 type Spec struct {
@@ -111,6 +119,26 @@ type Sandbox interface {
 	CopyOut(ctx context.Context, h Handle, path string) ([]byte, error)
 	// Destroy removes the sandbox.
 	Destroy(ctx context.Context, h Handle) error
+}
+
+// Snapshot describes a saved /workspace.
+type Snapshot struct {
+	TarPath          string // absolute path of the /workspace archive
+	SHA256           string // "sha256:<hex>" of the file at TarPath
+	Bytes            int64
+	ImageID          string // image ID the container ran, e.g. "sha256:..."
+	ProcessesSkipped string // why processes were not kept
+}
+
+// Suspender is implemented by backends that can save /workspace to a file and
+// free the sandbox, then bring it back later (files only).
+type Suspender interface {
+	// Suspend writes the /workspace archive of h to tarPath, destroys the
+	// sandbox and returns the snapshot.
+	Suspend(ctx context.Context, h Handle, tarPath string) (Snapshot, error)
+	// Restore creates a sandbox for spec and fills /workspace from snap. It
+	// returns ErrSnapshotChanged or ErrImageGone when snap cannot be used.
+	Restore(ctx context.Context, spec Spec, snap Snapshot) (Handle, error)
 }
 
 // CapOutput returns b unchanged if len(b) <= max, otherwise the first max

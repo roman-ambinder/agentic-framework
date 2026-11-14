@@ -17,6 +17,7 @@ import (
 // runBackend is the part of the sandbox backend `adlc run` uses;
 // *docker.Backend implements it.
 type runBackend interface {
+	sandbox.Suspender
 	Create(ctx context.Context, spec sandbox.Spec) (sandbox.Handle, error)
 	CopyOut(ctx context.Context, h sandbox.Handle, path string) ([]byte, error)
 	Destroy(ctx context.Context, h sandbox.Handle) error
@@ -42,6 +43,8 @@ type runSandbox struct {
 	backend runBackend
 	handle  sandbox.Handle
 	runID   string
+	// suspends is false for `pause: keep`: the container stays while paused.
+	suspends bool
 }
 
 // startRunSandbox creates the sandbox the agent declares and puts its id into
@@ -61,7 +64,7 @@ func startRunSandbox(ctx context.Context, a *agentconfig.Agent, runID string, op
 		return nil, fmt.Errorf("run: create sandbox: %w", err)
 	}
 	expandSandboxID(a, h)
-	return &runSandbox{backend: b, handle: h, runID: runID}, nil
+	return &runSandbox{backend: b, handle: h, runID: runID, suspends: a.Sandbox.Suspends()}, nil
 }
 
 // expandSandboxID replaces {{sandbox_id}} in every tool command.
@@ -96,14 +99,18 @@ func (s *runSandbox) destroy(ctx context.Context, stdout io.Writer) {
 }
 
 // finish handles the sandbox after a run that returned a state. A run that
-// awaits approval keeps its container. Otherwise /workspace is copied out
-// and the container destroyed unless --keep-sandbox is set. If the copy
-// fails the container is kept so the work is not lost.
-func (s *runSandbox) finish(ctx context.Context, o runOptions, state *eventlog.RunState, stdout io.Writer) error {
+// awaits approval has its sandbox suspended to a snapshot next to the event
+// log o.db (or kept, with `pause: keep` or when Suspend fails). Otherwise
+// /workspace is copied out and the container destroyed unless --keep-sandbox
+// is set. If the copy fails the container is kept so the work is not lost.
+func (s *runSandbox) finish(ctx context.Context, o runOptions, store *eventlog.Store, state *eventlog.RunState, stdout io.Writer) error {
 	if s == nil {
 		return nil
 	}
 	if state.StopReason == adlcv1.StopReason_STOP_REASON_AWAITING_APPROVAL {
+		if s.suspends {
+			return s.suspend(ctx, o, store, state, stdout)
+		}
 		s.keepForResume(stdout)
 		return nil
 	}
