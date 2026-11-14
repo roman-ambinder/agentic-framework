@@ -141,7 +141,7 @@ func runAgentWith(ctx context.Context, o runOptions, stdout io.Writer, openSandb
 		return &exitError{code: 1, err: err}
 	}
 	printSummary(stdout, state)
-	if err := sb.finish(ctx, o, state, stdout); err != nil {
+	if err := sb.finish(ctx, o, store, state, stdout); err != nil {
 		return &exitError{code: 1, err: err}
 	}
 	if state.StopReason == adlcv1.StopReason_STOP_REASON_COMPLETED {

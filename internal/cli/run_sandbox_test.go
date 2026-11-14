@@ -51,6 +51,16 @@ func (r *recordingBackend) FindByRunID(context.Context, string) ([]sandbox.Handl
 
 func (r *recordingBackend) Close() error { r.closed = true; return nil }
 
+var errNoSuspend = errors.New("recordingBackend: suspend is not supported")
+
+func (r *recordingBackend) Suspend(context.Context, sandbox.Handle, string) (sandbox.Snapshot, error) {
+	return sandbox.Snapshot{}, errNoSuspend
+}
+
+func (r *recordingBackend) Restore(context.Context, sandbox.Spec, sandbox.Snapshot) (sandbox.Handle, error) {
+	return sandbox.Handle{}, errNoSuspend
+}
+
 // sandboxRun writes the hello agent with a sandbox section (and the given
 // policy decision for reads) and runs it with backend. It returns stdout,
 // the error and the workspace-out directory.
@@ -142,21 +152,62 @@ func TestRunSandboxKeepSandboxFlag(t *testing.T) {
 	}
 }
 
-func TestRunSandboxKeptWhenAwaitingApproval(t *testing.T) {
-	b := newRecordingBackend(t)
-	stdout, out, err := sandboxRun(t, "needs_approval", nil, func(context.Context) (runBackend, error) { return b, nil })
+func TestRunSandboxPausedWhenAwaitingApproval(t *testing.T) {
+	e := pausableRun(t, "", &sandboxtest.Pausable{})
 	var ee *exitError
-	if !errors.As(err, &ee) || ee.code != 2 {
-		t.Fatalf("err = %v, want exit 2", err)
+	if !errors.As(e.err, &ee) || ee.code != 2 {
+		t.Fatalf("err = %v, want exit 2", e.err)
 	}
-	if !strings.Contains(stdout, "stop:    awaiting_approval\n") || !strings.Contains(stdout, "sandbox: kept host-1 for resume\n") {
-		t.Errorf("stdout = %q", stdout)
+	if !strings.Contains(e.stdout, "stop:    awaiting_approval\n") ||
+		!strings.Contains(e.stdout, "sandbox: paused (files only: process checkpoints are not supported yet)\n") {
+		t.Errorf("stdout = %q", e.stdout)
 	}
-	if len(b.destroyed) != 0 || b.copied != 0 {
-		t.Errorf("destroyed %v, copied %d; want neither", b.destroyed, b.copied)
+	seqs := suspendedSeqs(runEvents(t, e.db))
+	if len(seqs) != 1 {
+		t.Fatalf("sandbox_suspended at %v, want one", seqs)
 	}
-	if _, err := os.Stat(out); err == nil {
+	if got, err := os.ReadFile(snapshotPath(e.db, "r1", seqs[0])); err != nil || !bytes.Equal(got, e.b.Workspace) {
+		t.Errorf("tar = %d bytes, %v", len(got), err)
+	}
+	if live := e.b.Live(); len(live) != 0 {
+		t.Errorf("live sandboxes %v, want none", live)
+	}
+	if _, err := os.Stat(filepath.Join(e.dir, "out")); err == nil {
 		t.Error("workspace was copied out")
+	}
+}
+
+func TestRunSandboxKeepPauseKeepsContainer(t *testing.T) {
+	e := pausableRun(t, "  pause: keep\n", &sandboxtest.Pausable{})
+	var ee *exitError
+	if !errors.As(e.err, &ee) || ee.code != 2 {
+		t.Fatalf("err = %v, want exit 2", e.err)
+	}
+	if !strings.Contains(e.stdout, "sandbox: kept fake-1 for resume\n") || strings.Contains(e.stdout, "paused") {
+		t.Errorf("stdout = %q", e.stdout)
+	}
+	if seqs := suspendedSeqs(runEvents(t, e.db)); len(seqs) != 0 {
+		t.Errorf("sandbox_suspended at %v, want none", seqs)
+	}
+	if live := e.b.Live(); len(live) != 1 {
+		t.Errorf("live sandboxes %v, want one", live)
+	}
+}
+
+func TestFinishKeepsContainerWhenSuspendFails(t *testing.T) {
+	e := pausableRun(t, "", &sandboxtest.Pausable{SuspendErr: errors.New("disk full")})
+	var ee *exitError
+	if !errors.As(e.err, &ee) || ee.code != 2 {
+		t.Fatalf("err = %v, want exit 2", e.err)
+	}
+	if !strings.Contains(e.stdout, "sandbox: pause failed: disk full\nsandbox: kept fake-1 for resume\n") {
+		t.Errorf("stdout = %q", e.stdout)
+	}
+	if seqs := suspendedSeqs(runEvents(t, e.db)); len(seqs) != 0 {
+		t.Errorf("sandbox_suspended at %v, want none", seqs)
+	}
+	if live := e.b.Live(); len(live) != 1 {
+		t.Errorf("live sandboxes %v, want one", live)
 	}
 }
 

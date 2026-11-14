@@ -1129,6 +1129,27 @@ func (s *Store) Promote(ctx context.Context, name string, version int, env Env,
 var ErrInvalidRef, ErrInvalidAgent, ErrVersionNotFound, ErrNotPromoted, ErrReportMismatch, ErrPromotionRefused error
 ```
 
+### CLI (`internal/cli`) — P.5b
+
+- `runBackend` and `sandboxLookup` embed `sandbox.Suspender`; `sandboxLookup`
+  is `runBackend` plus `Exec`.
+- `snapshot.go`: `snapshotPath(dbPath, runID, seq)` →
+  `<dir of db>/snapshots/<run_id>/<seq>.tar`; `pendingSnapshot(ctx, store,
+  runID, dbDir)` scans the log (no `RunState` field, see design §5.3) and
+  returns the latest unrestored snapshot with an absolute `TarPath`;
+  `appendSuspended` (stores `SnapshotRef` relative to `dbDir`) and
+  `appendRestored` (`Processes: false`, `FallbackCause` =
+  `ProcessesSkipped`).
+- `(*runSandbox).finish(ctx, o, store, state, stdout)`: a run awaiting
+  approval is suspended (`sandbox: paused (files only: <reason>)`) unless
+  `pause: keep`; a failed `Suspend` keeps the container and appends nothing.
+- `attachSandbox(ctx, a, runID, sandboxSource{open, store, dbDir}, stdout)
+  (*runSandbox, error)` restores a pending snapshot
+  (`sandbox: restored <id> (files only)`) or does the live lookup as before;
+  `adlc approve` and `adlc resume` call `finish` on the state they get back,
+  and after a failed `Approve`/`Resume` pause the sandbox again if the run is
+  still paused.
+
 ### Evals (`internal/evals`)
 
 The complete lists of Q.1 and Q.2 names are in §9; the lines below are a summary.

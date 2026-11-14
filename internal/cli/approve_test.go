@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	adlcv1 "github.com/roman-ambinder/agentic-framework/gen/go/adlc/v1"
 	"github.com/roman-ambinder/agentic-framework/internal/eventlog"
 	"github.com/roman-ambinder/agentic-framework/internal/harness"
+	"github.com/roman-ambinder/agentic-framework/internal/sandbox/sandboxtest"
 )
 
 const (
@@ -208,5 +210,119 @@ func TestOneLine(t *testing.T) {
 				t.Fatalf("got %q", got)
 			}
 		})
+	}
+}
+
+// restoredSeqs returns suspended_seq of every sandbox_restored event.
+func restoredSeqs(evs []*adlcv1.Event) []uint64 {
+	var out []uint64
+	for _, r := range pick(evs, (*adlcv1.Event).GetSandboxRestored) {
+		out = append(out, r.GetSuspendedSeq())
+	}
+	return out
+}
+
+func TestApproveRestoresLatestSnapshot(t *testing.T) {
+	e := pausableRun(t, "", &sandboxtest.Pausable{})
+	out, err := approveWith(t, e, "a-call_1", parkAgainScript)
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 2 {
+		t.Fatalf("first approve: err = %v, stdout %q", err, out)
+	}
+	if !strings.Contains(out, "sandbox: restored fake-2 (files only)\n") || !strings.Contains(out, "sandbox: paused (files only: ") {
+		t.Errorf("first approve stdout = %q", out)
+	}
+	out, err = approveWith(t, e, "a-call_2", approveScript)
+	if err != nil || !strings.Contains(out, "stop:    completed") || !strings.Contains(out, "sandbox: restored fake-3 (files only)\n") {
+		t.Fatalf("second approve: err = %v, stdout %q", err, out)
+	}
+	evs := runEvents(t, e.db)
+	suspended, restored := suspendedSeqs(evs), restoredSeqs(evs)
+	if len(suspended) != 2 || len(restored) != 2 || restored[0] != suspended[0] || restored[1] != suspended[1] {
+		t.Fatalf("suspended %v, restored %v; want each restore to name the latest pause", suspended, restored)
+	}
+	if live := e.b.Live(); len(live) != 0 {
+		t.Errorf("live sandboxes %v, want none", live)
+	}
+	if got, err := os.ReadFile(filepath.Join(e.dir, "out", "greeting.txt")); err != nil || string(got) != "hello, world\n" {
+		t.Errorf("copied-out greeting.txt = %q, %v", got, err)
+	}
+}
+
+func TestApproveRunWithoutSnapshotUsesLiveContainer(t *testing.T) {
+	agent, script, db := helloDir(t, approvalRunScript)
+	dir := filepath.Dir(agent)
+	// The fs root names the sandbox, so the agent needs the live lookup.
+	if err := os.MkdirAll(filepath.Join(dir, "workspace", "fake-1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	yml := strings.Replace(pausableAgentYAML(dir, "  pause: keep\n"), "/workspace\"]", "/workspace/{{sandbox_id}}\"]", 1)
+	e := pausableRunAgent(t, agent, yml, script, db, &sandboxtest.Pausable{})
+	if live := e.b.Live(); len(live) != 1 || len(suspendedSeqs(runEvents(t, db))) != 0 {
+		t.Fatalf("setup: live %v, stdout %q", live, e.stdout)
+	}
+	out, err := approveWith(t, e, "a-call_1", approveScript)
+	if err != nil || !strings.Contains(out, "stop:    completed") {
+		t.Fatalf("err = %v, stdout %q", err, out)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "workspace", "fake-1", "out.txt")); err != nil || string(b) != "hi" {
+		t.Fatalf("out.txt = %q, %v (tools did not use the live sandbox)", b, err)
+	}
+	if n := len(restoredSeqs(runEvents(t, db))); n != 0 {
+		t.Errorf("%d sandbox_restored events, want none", n)
+	}
+	if live := e.b.Live(); len(live) != 0 {
+		t.Errorf("live sandboxes %v, want the completed run's sandbox destroyed", live)
+	}
+}
+
+func TestApproveFailsWhenSnapshotMissing(t *testing.T) {
+	e := pausableRun(t, "", &sandboxtest.Pausable{})
+	seqs := suspendedSeqs(runEvents(t, e.db))
+	if len(seqs) != 1 {
+		t.Fatalf("setup: sandbox_suspended at %v", seqs)
+	}
+	tarPath := snapshotPath(e.db, "r1", seqs[0])
+	if err := os.Remove(tarPath); err != nil {
+		t.Fatal(err)
+	}
+	n := eventCount(t, e.db)
+	_, err := approveWith(t, e, "a-call_1", approveScript)
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 1 || !strings.Contains(err.Error(), "resume: restore sandbox from "+tarPath+": ") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := eventCount(t, e.db); got != n {
+		t.Errorf("%d events after the failed approve, want %d", got, n)
+	}
+	if live := e.b.Live(); len(live) != 0 {
+		t.Errorf("live sandboxes %v, want none", live)
+	}
+}
+
+func TestApproveFailureAfterRestorePausesAgain(t *testing.T) {
+	e := pausableRun(t, "", &sandboxtest.Pausable{})
+	yml, err := os.ReadFile(e.agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A different agent version passes the restore but makes harness.Approve fail.
+	if err := os.WriteFile(e.agent, []byte(strings.Replace(string(yml), "version: 1", "version: 2", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := approveWith(t, e, "a-call_1", approveScript)
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 1 || !errors.Is(err, harness.ErrAgentMismatch) {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(out, "sandbox: restored fake-2 (files only)\n") || !strings.Contains(out, "sandbox: paused (files only: ") {
+		t.Errorf("stdout = %q", out)
+	}
+	evs := runEvents(t, e.db)
+	if s, r := suspendedSeqs(evs), restoredSeqs(evs); len(s) != 2 || len(r) != 1 || r[0] != s[0] {
+		t.Fatalf("suspended %v, restored %v", s, r)
+	}
+	if live := e.b.Live(); len(live) != 0 {
+		t.Errorf("live sandboxes %v, want none", live)
 	}
 }

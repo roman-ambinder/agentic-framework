@@ -25,12 +25,12 @@ import (
 // sandboxProbeTimeout bounds the "is the sandbox alive" check.
 const sandboxProbeTimeout = 10 * time.Second
 
-// sandboxLookup is the part of the sandbox backend `adlc resume` uses;
-// *docker.Backend implements it.
+// sandboxLookup is the part of the sandbox backend `adlc resume` and
+// `adlc approve` use: they find or restore the sandbox, then finish it like
+// `adlc run`. *docker.Backend implements it.
 type sandboxLookup interface {
-	FindByRunID(ctx context.Context, runID string) ([]sandbox.Handle, error)
+	runBackend
 	Exec(ctx context.Context, h sandbox.Handle, cmd []string, timeout time.Duration) (sandbox.ExecResult, error)
-	Close() error
 }
 
 // openSandboxBackend connects to the Docker backend.
@@ -109,20 +109,27 @@ func resumeAgent(ctx context.Context, o runOptions, runID string, stdout io.Writ
 		return &exitError{code: 1, err: err}
 	}
 	defer closeKS()
-	if err := attachSandbox(ctx, a, runID, openSandbox); err != nil {
+	sb, err := attachSandbox(ctx, a, runID, sandboxSource{open: openSandbox, store: store, dbDir: filepath.Dir(o.db)}, stdout)
+	if err != nil {
 		return &exitError{code: 1, err: err}
 	}
+	defer sb.close()
 	cfg, deps, cleanup, err := buildRun(ctx, a, o, runID, store)
 	if err != nil {
+		sb.finishAfterError(ctx, o, store, stdout)
 		return &exitError{code: 1, err: err}
 	}
 	defer func() { _ = cleanup() }()
 	deps.KillSwitch = ks
 	state, err := harness.Resume(ctx, cfg, deps)
 	if err != nil {
+		sb.finishAfterError(ctx, o, store, stdout)
 		return &exitError{code: 1, err: err}
 	}
 	printSummary(stdout, state)
+	if err := sb.finish(ctx, o, store, state, stdout); err != nil {
+		return &exitError{code: 1, err: err}
+	}
 	if state.StopReason == adlcv1.StopReason_STOP_REASON_COMPLETED {
 		return nil
 	}
@@ -157,28 +164,50 @@ func usesSandbox(a *agentconfig.Agent) bool {
 	return false
 }
 
-// attachSandbox finds the run's sandbox, checks that it still runs, and puts
-// its id into the tool commands that name the placeholder. It does nothing
-// for an agent without sandbox tools.
-func attachSandbox(ctx context.Context, a *agentconfig.Agent, runID string,
-	open func(context.Context) (sandboxLookup, error),
-) error {
-	if !usesSandbox(a) {
-		return nil
+// sandboxSource is where attachSandbox finds a run's sandbox: the backend
+// and the event log (with its directory, which snapshot paths are relative to).
+type sandboxSource struct {
+	open  func(context.Context) (sandboxLookup, error)
+	store *eventlog.Store
+	dbDir string
+}
+
+// attachSandbox gives a continued run its sandbox and puts the sandbox id
+// into the tool commands. A run whose sandbox was suspended is restored from
+// its latest snapshot. Otherwise, for an agent whose tools name the
+// placeholder, the live container is found and probed. It returns nil, nil
+// when there is nothing to attach.
+func attachSandbox(ctx context.Context, a *agentconfig.Agent, runID string, src sandboxSource, stdout io.Writer) (*runSandbox, error) {
+	spec, hasSpec := a.SandboxSpec(runID)
+	if !hasSpec && !usesSandbox(a) {
+		return nil, nil
 	}
-	b, err := open(ctx)
+	snap, seq, pending, err := pendingSnapshot(ctx, src.store, runID, src.dbDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer b.Close()
-	h, err := findLiveSandbox(ctx, b, runID)
+	if pending && !hasSpec {
+		return nil, fmt.Errorf("resume: run %q has a saved sandbox (%s) but the agent file has no sandbox section", runID, snap.TarPath)
+	}
+	if !pending && !usesSandbox(a) {
+		return nil, nil
+	}
+	b, err := src.open(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for i := range a.Tools {
-		a.Tools[i].Command = sandbox.ExpandArgs(a.Tools[i].Command, h)
+	var h sandbox.Handle
+	if pending {
+		h, err = restoreSandbox(ctx, b, src.store, runID, spec, snap, seq, stdout)
+	} else {
+		h, err = findLiveSandbox(ctx, b, runID)
 	}
-	return nil
+	if err != nil {
+		_ = b.Close()
+		return nil, err
+	}
+	expandSandboxID(a, h)
+	return &runSandbox{backend: b, handle: h, runID: runID, suspends: hasSpec && a.Sandbox.Suspends()}, nil
 }
 
 func findLiveSandbox(ctx context.Context, b sandboxLookup, runID string) (sandbox.Handle, error) {

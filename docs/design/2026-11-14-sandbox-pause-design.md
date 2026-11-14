@@ -203,8 +203,12 @@ message SandboxRestored {
 ```
 
 `fold.go` change: while `StatusPaused`, also accept `sandbox_suspended` and
-`sandbox_restored` without leaving the paused state. `RunState` gains
-`LastSuspendedSeq uint64` so callers can find the snapshot without scanning.
+`sandbox_restored` without leaving the paused state. `RunState` gains no
+field: `RunState.Digest()` JSON-encodes the whole struct, so a new field would
+change the digest of every existing run. Instead the CLI scans the log
+(`pendingSnapshot` in `internal/cli/snapshot.go`): the latest
+`sandbox_suspended` with no later `sandbox_restored` naming its seq is the
+snapshot to restore.
 Add a fold test for each, plus one that a paused run still refuses every other
 kind.
 
@@ -217,8 +221,8 @@ kind.
   `sandbox: paused (files only: daemon is not in experimental mode)`.
   If `Suspend` fails, keep today's behaviour (container kept, message printed)
   and append nothing.
-- `attachSandbox` (used by `approve` and `resume`): if the run's state has a
-  `LastSuspendedSeq` with no later `SandboxRestored`, call `Restore`, append
+- `attachSandbox` (used by `approve` and `resume`): if the log has a
+  `SandboxSuspended` with no later `SandboxRestored` (see §5.3), call `Restore`, append
   `SandboxRestored`, and print what survived. Otherwise keep today's
   live-container lookup.
 - **Every command that continues a run handles the sandbox afterwards, not
@@ -229,8 +233,7 @@ kind.
   on the returned state, so a run that parks a second time is paused again
   and a run that completes is copied out and destroyed as today.
 - **Many pauses per run.** A run can park many times. Each pause writes a new
-  `SandboxSuspended` and a new tar; `LastSuspendedSeq` always names the latest
-  one; the matching `SandboxRestored.suspended_seq` closes it. Older tars may
+  `SandboxSuspended` and a new tar; the latest one is the one to restore; the matching `SandboxRestored.suspended_seq` closes it. Older tars may
   be deleted once a later restore has succeeded.
 - **Approve fails after a restore** (restore succeeded, then
   `harness.Approve` returns an error before `approval_resolved` is written):
