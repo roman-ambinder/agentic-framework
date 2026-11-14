@@ -149,10 +149,13 @@ func (s *RunState) apply(ev *adlcv1.Event) error {
 	case StatusFinished:
 		return fmt.Errorf("run already finished (%s)", s.StopReason)
 	case StatusPaused:
-		if ev.GetApprovalResolved() == nil {
-			return errors.New("paused run can only continue with approval_resolved")
+		sandbox := ev.GetSandboxSuspended() != nil || ev.GetSandboxRestored() != nil
+		if ev.GetApprovalResolved() == nil && !sandbox {
+			return errors.New("paused run can only continue with approval_resolved or a sandbox event")
 		}
-		s.Status = StatusRunning
+		if !sandbox {
+			s.Status = StatusRunning
+		}
 	}
 
 	s.LastSeq = ev.GetSeq()
@@ -265,6 +268,11 @@ func (s *RunState) apply(ev *adlcv1.Event) error {
 	case *adlcv1.Event_RunResumed:
 		// Changes nothing: a new field would change every digest. The checks
 		// above already allow it only while the run is running.
+
+	case *adlcv1.Event_SandboxSuspended, *adlcv1.Event_SandboxRestored:
+		// Changes nothing: a new field would change every digest. A paused run
+		// stays paused; the checks above allow these only while the run is
+		// paused or running.
 
 	case nil:
 		s.UnknownEvents++

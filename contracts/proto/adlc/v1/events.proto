@@ -49,6 +49,8 @@ message Event {
     Checkpoint checkpoint = 20;
     ErrorOccurred error_occurred = 21;
     RunResumed run_resumed = 22;
+    SandboxSuspended sandbox_suspended = 23;
+    SandboxRestored sandbox_restored = 24;
   }
 }
 
@@ -106,6 +108,32 @@ message RunResumed {
   uint32 abandoned_tool_calls = 3;
   // Why the run is resumed, for people reading the log.
   string reason = 4;
+}
+
+// SandboxSuspended is written when a run paused for approval has its sandbox
+// workspace saved and the container freed.
+message SandboxSuspended {
+  // Path of the workspace tar, relative to .adlc/.
+  string snapshot_ref = 1;
+  string workspace_sha256 = 2;
+  int64 workspace_bytes = 3;
+  string image_id = 4;
+  // "" = files only.
+  string checkpoint_id = 5;
+  // Reason processes were not checkpointed, "" if they were.
+  string processes_skipped = 6;
+}
+
+// SandboxRestored is written when the sandbox of a paused run is brought back.
+message SandboxRestored {
+  // The SandboxSuspended event restored from.
+  uint64 suspended_seq = 1;
+  // True = processes continued.
+  bool processes = 2;
+  // Why the process checkpoint was not used.
+  string fallback_cause = 3;
+  // Handle now in use.
+  string sandbox_id = 4;
 }
 
 message RunCompleted {

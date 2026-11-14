@@ -342,6 +342,13 @@ type Log interface {
 func (s *Store) Runs(ctx context.Context) ([]string, error)
 ```
 
+Task P.1 adds the event kinds `sandbox_suspended` (`SandboxSuspended`) and
+`sandbox_restored` (`SandboxRestored`). `Fold` accepts them while a run is
+paused or running and they never change `Status` or any other `RunState` field
+except `LastSeq` and `LastEventAt` (a new field would change every digest). A
+paused run still rejects every kind except `approval_resolved` and these two;
+a finished run rejects both.
+
 ## §4 Policy — `internal/policy`
 
 ```go

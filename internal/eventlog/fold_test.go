@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,6 +91,18 @@ func checkpoint(step uint32) *adlcv1.Event {
 
 func resumed() *adlcv1.Event {
 	return &adlcv1.Event{Payload: &adlcv1.Event_RunResumed{RunResumed: &adlcv1.RunResumed{NextStep: 2, Reason: "test"}}}
+}
+
+func sandboxSuspended() *adlcv1.Event {
+	return &adlcv1.Event{Payload: &adlcv1.Event_SandboxSuspended{SandboxSuspended: &adlcv1.SandboxSuspended{
+		SnapshotRef: "runs/r1/workspace.tar", WorkspaceSha256: "sha256:x", WorkspaceBytes: 10,
+	}}}
+}
+
+func sandboxRestored() *adlcv1.Event {
+	return &adlcv1.Event{Payload: &adlcv1.Event_SandboxRestored{SandboxRestored: &adlcv1.SandboxRestored{
+		SuspendedSeq: 3, SandboxId: "box1",
+	}}}
 }
 
 func failure() *adlcv1.Event {
@@ -326,12 +339,15 @@ func TestEveryKindIsHandled(t *testing.T) {
 		"checkpoint":           checkpoint(1),
 		"error_occurred":       failure(),
 		"run_resumed":          resumed(),
+		"sandbox_suspended":    sandboxSuspended(),
+		"sandbox_restored":     sandboxRestored(),
 		"run_completed":        completed(adlcv1.StopReason_STOP_REASON_COMPLETED),
 	}
 	order := []string{
 		"model_call_started", "model_call_completed", "model_call_failed",
 		"tool_call_requested", "policy_decided", "tool_call_completed",
-		"approval_requested", "approval_resolved", "checkpoint", "error_occurred", "run_resumed", "run_completed",
+		"approval_requested", "approval_resolved", "checkpoint", "error_occurred", "run_resumed",
+		"sandbox_suspended", "sandbox_restored", "run_completed",
 	}
 	var evs []*adlcv1.Event
 	for _, k := range order {
@@ -367,5 +383,75 @@ func TestFoldRunResumedChangesOnlyPosition(t *testing.T) {
 	}
 	if got.Status != StatusRunning {
 		t.Fatalf("status = %v, want running", got.Status)
+	}
+}
+
+func awaiting() []*adlcv1.Event {
+	return []*adlcv1.Event{
+		approvalRequested("a1"),
+		completed(adlcv1.StopReason_STOP_REASON_AWAITING_APPROVAL),
+	}
+}
+
+func TestPausedRunAcceptsSandboxEvents(t *testing.T) {
+	base := awaiting()
+	s := mustFold(t, logOf(append(slices.Clone(base), sandboxSuspended(), sandboxRestored())...))
+	if s.Status != StatusPaused || s.UnknownEvents != 0 {
+		t.Fatalf("status %s unknown %d; want paused, 0", s.Status, s.UnknownEvents)
+	}
+	s = mustFold(t, logOf(append(slices.Clone(base), sandboxSuspended(), sandboxRestored(), approvalResolved("a1", true))...))
+	if s.Status != StatusRunning || s.UnknownEvents != 0 {
+		t.Fatalf("status %s unknown %d; want running, 0", s.Status, s.UnknownEvents)
+	}
+}
+
+func TestRunningRunAcceptsSandboxEvents(t *testing.T) {
+	s := mustFold(t, logOf(sandboxRestored()))
+	if s.Status != StatusRunning || s.UnknownEvents != 0 {
+		t.Fatalf("status %s unknown %d; want running, 0", s.Status, s.UnknownEvents)
+	}
+}
+
+// A sandbox event may move only the seq and time, or every digest changes.
+func TestSandboxEventsChangeNoStateField(t *testing.T) {
+	before := mustFold(t, logOf(awaiting()...))
+	after := *mustFold(t, logOf(awaiting()...))
+	next := sandboxSuspended()
+	next.RunId, next.Seq, next.Time = "r1", before.LastSeq+1, timestamppb.New(t0.Add(time.Hour))
+	if err := after.Apply(next); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	a, b := *before, after
+	a.LastSeq, a.LastEventAt = 0, time.Time{}
+	b.LastSeq, b.LastEventAt = 0, time.Time{}
+	if !reflect.DeepEqual(a, b) {
+		t.Fatalf("sandbox_suspended changed more than seq and time:\n got %+v\nwant %+v", b, a)
+	}
+}
+
+func TestPausedRunStillRejectsOtherKinds(t *testing.T) {
+	tests := []struct {
+		name string
+		ev   *adlcv1.Event
+	}{
+		{"model_call_started", modelStarted(1)},
+		{"tool_call_requested", toolRequested("t1")},
+		{"checkpoint", checkpoint(2)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Fold(logOf(append(awaiting(), tt.ev)...))
+			const want = "paused run can only continue with approval_resolved or a sandbox event"
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("err = %v, want containing %q", err, want)
+			}
+		})
+	}
+}
+
+func TestFinishedRunRejectsSandboxEvents(t *testing.T) {
+	_, err := Fold(logOf(completed(adlcv1.StopReason_STOP_REASON_COMPLETED), sandboxSuspended()))
+	if err == nil || !strings.Contains(err.Error(), "run already finished") {
+		t.Fatalf("err = %v, want run already finished", err)
 	}
 }
