@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -44,28 +45,53 @@ func openSandboxBackend(ctx context.Context) (sandboxLookup, error) {
 func newResumeCmd() *cobra.Command {
 	var o runOptions
 	cmd := &cobra.Command{
-		Use:   "resume RUN_ID --agent AGENT_YAML",
+		Use:   "resume RUN_ID [AGENT_YAML|NAME@N|NAME@ENV]",
 		Short: "Continue a run that stopped without run_completed",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			agent, err := resumeAgentPath(args[1:], o.agentPath)
+			if err != nil {
+				return &exitError{code: 1, err: err}
+			}
+			o.agentPath = agent
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return resumeAgent(ctx, o, args[0], cmd.OutOrStdout(), openSandboxBackend)
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&o.agentPath, "agent", "", "agent file the run was started with (required)")
-	f.StringVar(&o.db, "db", ".adlc/events.db", "event log file")
+	f.StringVar(&o.agentPath, "agent", "", "agent file the run was started with (same as AGENT_YAML)")
+	f.StringVar(&o.db, "db", defaultDBPath, "event log file")
+	f.StringVar(&o.controlDB, "control-db", defaultControlDBPath, "control database (kill switches)")
 	f.StringVar(&o.fakeScript, "fake-script", "", "fake model script (provider fake only)")
 	f.StringVar(&o.modelName, "model-name", "", "overrides model.name from the agent file")
-	_ = cmd.MarkFlagRequired("agent")
 	return cmd
+}
+
+// resumeAgentPath returns the agent file of `adlc resume`: the positional
+// AGENT_YAML or the --agent flag, which must agree when both are given.
+func resumeAgentPath(positional []string, flag string) (string, error) {
+	switch {
+	case len(positional) == 0 && flag == "":
+		return "", errors.New("resume: an agent file is required (AGENT_YAML or --agent)")
+	case len(positional) == 0:
+		return flag, nil
+	case flag == "" || filepath.Clean(flag) == filepath.Clean(positional[0]):
+		return positional[0], nil
+	default:
+		return "", errors.New("resume: AGENT_YAML and --agent disagree")
+	}
 }
 
 // resumeAgent continues the run runID and prints the summary to stdout.
 func resumeAgent(ctx context.Context, o runOptions, runID string, stdout io.Writer,
 	openSandbox func(context.Context) (sandboxLookup, error),
 ) error {
+	o, cleanupRef, err := resolveAgentRef(ctx, o)
+	if err != nil {
+		return &exitError{code: 1, err: err}
+	}
+	defer cleanupRef()
 	a, err := loadAgent(o)
 	if err != nil {
 		return &exitError{code: 1, err: err}
@@ -78,6 +104,11 @@ func resumeAgent(ctx context.Context, o runOptions, runID string, stdout io.Writ
 	if err := checkResumable(ctx, store, runID); err != nil {
 		return &exitError{code: 1, err: err}
 	}
+	ks, closeKS, err := openKillSwitch(ctx, o.controlDB)
+	if err != nil {
+		return &exitError{code: 1, err: err}
+	}
+	defer closeKS()
 	if err := attachSandbox(ctx, a, runID, openSandbox); err != nil {
 		return &exitError{code: 1, err: err}
 	}
@@ -86,6 +117,7 @@ func resumeAgent(ctx context.Context, o runOptions, runID string, stdout io.Writ
 		return &exitError{code: 1, err: err}
 	}
 	defer func() { _ = cleanup() }()
+	deps.KillSwitch = ks
 	state, err := harness.Resume(ctx, cfg, deps)
 	if err != nil {
 		return &exitError{code: 1, err: err}

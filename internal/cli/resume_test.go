@@ -36,11 +36,15 @@ func (l *stopAfterLog) Append(ctx context.Context, ev *adlcv1.Event) (*adlcv1.Ev
 	return l.Log.Append(ctx, ev)
 }
 
-// crashedRun starts run "r1" of the hello agent and stops its log after n events.
-func crashedRun(t *testing.T, agent, script, db string, n int) {
+// crashedRun starts run "r1" of the hello agent and stops its log after two events
+// (run_started, model_call_started).
+func crashedRun(t *testing.T, agent, script, db string) {
 	t.Helper()
 	ctx := context.Background()
-	o := runOptions{agentPath: agent, task: "What does greeting.txt say?", db: db, fakeScript: script}
+	o := runOptions{
+		agentPath: agent, task: "What does greeting.txt say?", db: db, fakeScript: script,
+		startHook: (&hookHarness{}).start,
+	} // agents with hooks must not start real plugins
 	a, err := loadAgent(o)
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +54,7 @@ func crashedRun(t *testing.T, agent, script, db string, n int) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	cfg, deps, cleanup, err := buildRun(ctx, a, o, "r1", &stopAfterLog{Log: store, n: n})
+	cfg, deps, cleanup, err := buildRun(ctx, a, o, "r1", &stopAfterLog{Log: store, n: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +83,7 @@ func TestResumeCommandFinishedRun(t *testing.T) {
 
 func TestResumeCommandCompletesRun(t *testing.T) {
 	agent, script, db := helloDir(t, "")
-	crashedRun(t, agent, script, db, 2) // run_started, model_call_started
+	crashedRun(t, agent, script, db)
 	var out, errOut bytes.Buffer
 	code := Execute([]string{"resume", "r1", "--agent", agent, "--db", db, "--fake-script", script}, &out, &errOut)
 	if code != 0 {
@@ -116,14 +120,74 @@ func pick[T any](evs []*adlcv1.Event, get func(*adlcv1.Event) *T) []*T {
 
 func TestResumeCommandNeedsAgent(t *testing.T) {
 	code, _, stderr := run(t, "resume", "r1")
-	if code != 1 || !strings.Contains(stderr, `required flag(s) "agent" not set`) {
+	if code != 1 || !strings.Contains(stderr, "resume: an agent file is required (AGENT_YAML or --agent)") {
+		t.Fatalf("code = %d, stderr = %q", code, stderr)
+	}
+}
+
+func TestResumeAgentPath(t *testing.T) {
+	tests := []struct {
+		name       string
+		positional []string
+		flag       string
+		want       string
+		wantErr    string
+	}{
+		{name: "neither", wantErr: "resume: an agent file is required (AGENT_YAML or --agent)"},
+		{name: "positional only", positional: []string{"a.yaml"}, want: "a.yaml"},
+		{name: "flag only", flag: "a.yaml", want: "a.yaml"},
+		{name: "both same", positional: []string{"a.yaml"}, flag: "a.yaml", want: "a.yaml"},
+		{name: "both same after clean", positional: []string{"./a.yaml"}, flag: "a.yaml", want: "./a.yaml"},
+		{name: "both different", positional: []string{"a.yaml"}, flag: "b.yaml", wantErr: "resume: AGENT_YAML and --agent disagree"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resumeAgentPath(tt.positional, tt.flag)
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("err = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("got %q, %v; want %q", got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestResumeCommandPositionalAgentCompletesRun(t *testing.T) {
+	agent, script, db := helloDir(t, "")
+	crashedRun(t, agent, script, db)
+	code, out, stderr := run(t, "resume", "r1", agent, "--db", db, "--fake-script", script)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %s", code, stderr)
+	}
+	if !strings.Contains(out, "stop:    completed\n") {
+		t.Errorf("stdout %q lacks completed stop", out)
+	}
+}
+
+func TestResumeCommandAgentFlagStillWorks(t *testing.T) {
+	agent, script, db := helloDir(t, "")
+	crashedRun(t, agent, script, db)
+	code, _, stderr := run(t, "resume", "r1", "--agent", agent, "--db", db, "--fake-script", script)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %s", code, stderr)
+	}
+}
+
+func TestResumeCommandAgentsDisagree(t *testing.T) {
+	agent, script, db := helloDir(t, "")
+	code, _, stderr := run(t, "resume", "r1", agent, "--agent", agent+".other", "--db", db, "--fake-script", script)
+	if code != 1 || !strings.Contains(stderr, "resume: AGENT_YAML and --agent disagree") {
 		t.Fatalf("code = %d, stderr = %q", code, stderr)
 	}
 }
 
 func TestResumeCommandUnknownRun(t *testing.T) {
 	agent, script, db := helloDir(t, "")
-	crashedRun(t, agent, script, db, 2)
+	crashedRun(t, agent, script, db)
 	code, _, stderr := run(t, "resume", "nope", "--agent", agent, "--db", db, "--fake-script", script)
 	if code != 1 || !strings.Contains(stderr, "run not found") {
 		t.Fatalf("code = %d, stderr = %q", code, stderr)
@@ -162,6 +226,8 @@ version: 1
 model:
   provider: fake
   name: m
+sandbox:
+  workspace: .
 tools:
   - server: shell
     command: ["adlc", "tool", "shell", "--sandbox", "{{sandbox_id}}"]

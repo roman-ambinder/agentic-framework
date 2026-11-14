@@ -107,3 +107,27 @@ func TestSolvedFalseWhenErrorSet(t *testing.T) {
 		t.Error("a graded solved result is not solved")
 	}
 }
+
+func TestPrintTablePassAtKLines(t *testing.T) {
+	a := gradedResult("x", "p", Easy, true, "", 1, 1, 0, 0, 0)
+	b := gradedResult("x", "p", Easy, false, "", 1, 1, 0, 0, 0)
+	a.Agent, b.Agent = "coder@1", "coder@1"
+	results := []Result{a, b}
+	var buf bytes.Buffer
+	PrintTable(&buf, Report{Results: results, Summary: Summarize(results)})
+	if want := "coder@1  attempts 2  pass@1 0.500  pass@2 1.000\n"; !strings.Contains(buf.String(), want) {
+		t.Errorf("output lacks %q:\n%s", want, buf.String())
+	}
+}
+
+func TestOldReportLoads(t *testing.T) {
+	old := `{"suite":"s","results":[{"bug_id":"x","difficulty":"easy","agent":"coder@1","provider":"p","run_id":"r",
+	"stop_reason":"","hidden":{},"grade":{"solved":true},"changed_files":[],"duration_ms":1}],"summary":{"by_provider":{}}}`
+	var rep Report
+	if err := json.Unmarshal([]byte(old), &rep); err != nil {
+		t.Fatal(err)
+	}
+	if got := Summarize(rep.Results).ByAgent["coder@1"].MaxAttempts; got != 1 {
+		t.Errorf("MaxAttempts = %d, want 1", got)
+	}
+}

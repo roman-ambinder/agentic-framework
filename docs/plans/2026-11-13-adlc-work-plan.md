@@ -46,6 +46,10 @@ results, written down in §8 before work moves on.
 | 0.5.1–0.5.4, 0.5b, 0.6, 0.7.1, 0.7.2, 0.8, 0.9.1, 0.9.2, 0.10, 0.11.1, 0.11.2 | Rest of M0 | ✅ on `integration` |
 | E.2, E.3 | Seeded bugs, suite loader and self-check | ✅ on `integration` |
 | 1.1–1.3, 1.4.2, 1.5, 1.6.1, 1.6.2, 1.7, 1.8, 1.9, 1.11 | M1 code tasks | ✅ on `integration` |
+| G.1–G.4 | Gaps found in M0/M1: sandbox for `adlc run`, hooks in the agent file, CLI consistency, context keys | ✅ merged |
+| C.1–C.4 | M2-C control plane: approvals, policy v2, kill switch, agent registry and promotion | ✅ merged (PR #11) |
+| Q.1, Q.2 | M2-Q: pass@k and `adlc eval-compare`, failure analysis | ✅ merged (PR #11) |
+| Q.3–Q.5 | M2-Q: fork a run, plan step, model per step role | ✅ on `integration` |
 | E.4 | Manual baseline (a person runs it; sets gate G1's numbers) | ⏳ open |
 | 1.10 | Coder agent iteration (needs model API keys and a Docker host) | ⏳ open |
 

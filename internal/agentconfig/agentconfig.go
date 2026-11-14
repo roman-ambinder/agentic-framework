@@ -2,6 +2,7 @@
 package agentconfig
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +17,7 @@ const (
 	DefaultMaxTokens          = 4096
 	DefaultMaxToolOutputBytes = 16 * 1024
 	DefaultFakeModel          = "fake-model"
+	DefaultSandboxImage       = "golang:1.26"
 )
 
 // Agent is a parsed agent definition.
@@ -29,10 +31,26 @@ type Agent struct {
 	Tools              []ToolServer `yaml:"tools"`
 	Budget             Budget       `yaml:"budget"`
 	Context            Context      `yaml:"context"`
+	Planning           Planning     `yaml:"planning"`
 	Policy             Policy       `yaml:"policy"`
+	Hooks              []Hook       `yaml:"hooks"`
+	// Sandbox, if set, makes `adlc run` create a sandbox for the run.
+	Sandbox *Sandbox `yaml:"sandbox"`
 
 	// Dir is the directory of the file Load read ("" for Parse). Not in YAML.
 	Dir string `yaml:"-"`
+	// Sources are the files this definition was read from: the agent file
+	// (Path AgentFileName) first, then system_file if set. Set by Load, LoadAt and Parse.
+	Sources []SourceFile `yaml:"-"`
+}
+
+// Sandbox describes the container `adlc run` creates for the agent.
+type Sandbox struct {
+	Image     string  `yaml:"image"`     // default DefaultSandboxImage
+	Workspace string  `yaml:"workspace"` // host dir, relative to the agent file
+	Network   bool    `yaml:"network"`
+	CPUs      float64 `yaml:"cpus"`      // 0 = no limit
+	MemoryMB  int64   `yaml:"memory_mb"` // 0 = no limit
 }
 
 // Model selects and configures the model.
@@ -45,6 +63,15 @@ type Model struct {
 	// Fallbacks are tried in order when the primary fails with a retryable
 	// error (task 1.3). A fallback has no fallbacks of its own.
 	Fallbacks []Model `yaml:"fallbacks"`
+	// Roles is only allowed on the primary model (task Q.5).
+	Roles Roles `yaml:"roles"`
+}
+
+// Roles holds a model per step role (task Q.5). Role "act" (every normal step)
+// always uses the primary model and its fallbacks. A nil entry means the role
+// uses the primary model.
+type Roles struct {
+	Plan *Model `yaml:"plan"` // the planning call (task Q.4)
 }
 
 // Pricing holds USD per million tokens as decimal strings.
@@ -64,6 +91,16 @@ type ToolServer struct {
 	DefaultRisk string            `yaml:"default_risk"`
 }
 
+// Hook declares one out-of-process hook plugin (internal/plugin). It is
+// started in the agent file's directory.
+type Hook struct {
+	Name         string            `yaml:"name"`
+	Command      []string          `yaml:"command"`
+	Env          map[string]string `yaml:"env"`
+	StartTimeout string            `yaml:"start_timeout"` // Go duration; "" = plugin default
+	CallTimeout  string            `yaml:"call_timeout"`  // Go duration; "" = plugin default
+}
+
 // Budget holds run limits; zero or empty means no limit.
 type Budget struct {
 	MaxSteps     uint32 `yaml:"max_steps"`
@@ -79,18 +116,52 @@ type Context struct {
 	KeepRecentSteps int   `yaml:"keep_recent_steps"` // 0 = 2
 }
 
-// Policy is the static policy: a default decision and ordered rules.
+// Planning configures the optional planning call (task Q.4). Off by default.
+type Planning struct {
+	Enabled   bool   `yaml:"enabled"`
+	Prompt    string `yaml:"prompt"`     // "" = the harness default
+	MaxTokens int    `yaml:"max_tokens"` // 0 = the harness default
+}
+
+// Policy is the agent's policy: a default decision, included policy files and ordered rules.
 type Policy struct {
-	Default string `yaml:"default"`
-	Rules   []Rule `yaml:"rules"`
+	Default string   `yaml:"default"`
+	Include []string `yaml:"include"` // policy files, relative to the agent file
+	Rules   []Rule   `yaml:"rules"`
+	// Included holds the rules of the included files in evaluation order,
+	// filled by Load and Parse. Not in YAML.
+	Included []IncludedRule `yaml:"-"`
 }
 
 // Rule is one policy rule; the first match wins.
 type Rule struct {
-	ID       string `yaml:"id"`
-	Risk     string `yaml:"risk"`
-	Tool     string `yaml:"tool"`
-	Decision string `yaml:"decision"`
+	ID       string                `yaml:"id"`
+	Risk     string                `yaml:"risk"`
+	Tool     string                `yaml:"tool"`
+	Args     map[string]ArgMatcher `yaml:"args"`
+	Decision string                `yaml:"decision"`
+}
+
+// ArgMatcher is policy.ArgMatcher in YAML: exactly one key.
+type ArgMatcher struct {
+	Glob   string   `yaml:"glob"`
+	Prefix string   `yaml:"prefix"`
+	Regex  string   `yaml:"regex"`
+	In     []string `yaml:"in"`
+}
+
+// PolicyFile is a reusable policy file named by policy.include. It has no
+// default: the default decision comes only from the agent file.
+type PolicyFile struct {
+	Include []string `yaml:"include"` // relative to this file
+	Rules   []Rule   `yaml:"rules"`
+}
+
+// IncludedRule is a rule read from a policy file.
+type IncludedRule struct {
+	File  string // the policy file's path as resolved (see include.go)
+	Index int    // position in that file's rules
+	Rule  Rule
 }
 
 // Load reads, decodes (strict), applies defaults and validates the file.
@@ -100,7 +171,7 @@ func Load(path string) (*Agent, error) {
 		return nil, fmt.Errorf("agentconfig: %w", err)
 	}
 	abs, _ := filepath.Abs(path)
-	a, err := parse(data, filepath.Dir(abs))
+	a, err := parse(data, filepath.Dir(abs), filepath.Dir(abs))
 	if err != nil {
 		return nil, fmt.Errorf("agentconfig: %s: %w", path, err)
 	}
@@ -109,23 +180,25 @@ func Load(path string) (*Agent, error) {
 
 // Parse does the same as Load for bytes; Dir stays "".
 func Parse(data []byte) (*Agent, error) {
-	a, err := parse(data, "")
+	a, err := parse(data, "", "")
 	if err != nil {
 		return nil, fmt.Errorf("agentconfig: %w", err)
 	}
 	return a, nil
 }
 
-func parse(data []byte, dir string) (*Agent, error) {
+func parse(data []byte, fileDir, workDir string) (*Agent, error) {
 	var a Agent
 	if err := yaml.UnmarshalWithOptions(data, &a, yaml.Strict()); err != nil {
 		return nil, fmt.Errorf("decode: %s", yaml.FormatError(err, false, true))
 	}
-	a.Dir = dir
+	a.Dir = fileDir
+	a.Sources = []SourceFile{{Path: AgentFileName, Data: bytes.Clone(data)}}
 	a.applyDefaults()
 	if err := a.resolve(); err != nil {
 		return nil, err
 	}
+	a.Dir = workDir
 	if err := a.Validate(); err != nil {
 		return nil, err
 	}
@@ -138,6 +211,9 @@ func (a *Agent) applyDefaults() {
 	}
 	if a.MaxToolOutputBytes == 0 {
 		a.MaxToolOutputBytes = DefaultMaxToolOutputBytes
+	}
+	if a.Sandbox != nil && a.Sandbox.Image == "" {
+		a.Sandbox.Image = DefaultSandboxImage
 	}
 	if a.Model.Provider == "fake" && a.Model.Name == "" {
 		a.Model.Name = DefaultFakeModel
@@ -154,12 +230,16 @@ func (a *Agent) resolve() error {
 	for i := range a.Model.Fallbacks {
 		expandModel(&p, fmt.Sprintf("model.fallbacks[%d]", i), &a.Model.Fallbacks[i])
 	}
+	if r := a.Model.Roles.Plan; r != nil {
+		expandModel(&p, "model.roles.plan", r)
+	}
 	a.resolveSystemFile(&p)
+	a.resolvePolicyIncludes(&p)
 	return errors.Join(p...)
 }
 
 // expandModel expands the name and every pricing field of m. path is "model"
-// or "model.fallbacks[i]".
+// "model.fallbacks[i]" or "model.roles.plan".
 func expandModel(p *problems, path string, m *Model) {
 	expandName(p, path+".name", &m.Name)
 	pr := &m.Pricing
@@ -203,5 +283,6 @@ func (a *Agent) resolveSystemFile(p *problems) {
 		p.add("system_file", "file is empty")
 	default:
 		a.System = string(content)
+		a.Sources = append(a.Sources, SourceFile{Path: filepath.ToSlash(filepath.Clean(a.SystemFile)), Data: content})
 	}
 }

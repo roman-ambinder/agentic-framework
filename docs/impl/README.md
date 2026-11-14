@@ -73,7 +73,16 @@ A task can start once everything in "Depends on" is merged.
 | 1.10 | [Coder agent](tasks/1.10-coder-agent.md) | L | 1.9 |
 | 1.11 | [`adlc cost`](tasks/1.11-cost.md) | S | 0.9.2 |
 
-M2 and later are planned at gate G1 (work plan §5) and get briefs then.
+### G — gaps found while building M0/M1 (independent of gate G1)
+
+| ID | Brief | Size | Depends on |
+|----|-------|------|-----------|
+| G.1 | [Sandbox for `adlc run`](tasks/G-gaps.md#g1--sandbox-for-adlc-run) | M | — |
+| G.2 | [Hook plugins in the agent file](tasks/G-gaps.md#g2--hook-plugins-declared-in-the-agent-file) | M | — |
+| G.3 | [CLI consistency](tasks/G-gaps.md#g3--cli-consistency) | S | — |
+| G.4 | [Context manager memory keyed by position](tasks/G-gaps.md#g4--context-manager-memory-keyed-by-position) | S | — |
+
+M2 (both options, briefed before gate G1): see [m2.md](m2.md). M3 and later are planned after M2.
 
 ## Brief template
 

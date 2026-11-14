@@ -2,6 +2,7 @@ package agentconfig
 
 import (
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -10,6 +11,7 @@ import (
 	"github.com/roman-ambinder/agentic-framework/internal/contextmgr"
 	"github.com/roman-ambinder/agentic-framework/internal/model"
 	"github.com/roman-ambinder/agentic-framework/internal/policy"
+	"github.com/roman-ambinder/agentic-framework/internal/sandbox"
 )
 
 // ParsedToolServer is a ToolServer with parsed risk classes.
@@ -22,6 +24,30 @@ type ParsedToolServer struct {
 	DefaultRisk adlcv1.RiskClass
 }
 
+// ParsedHook is a Hook with parsed durations. Zero durations mean the
+// plugin's defaults.
+type ParsedHook struct {
+	Name         string
+	Command      []string
+	Env          map[string]string
+	Dir          string // = Agent.Dir
+	StartTimeout time.Duration
+	CallTimeout  time.Duration
+}
+
+// HookPlugins returns the declared hooks in file order.
+// Call only after Validate succeeded.
+func (a *Agent) HookPlugins() []ParsedHook {
+	out := make([]ParsedHook, 0, len(a.Hooks))
+	for _, h := range a.Hooks {
+		ph := ParsedHook{Name: h.Name, Command: append([]string(nil), h.Command...), Env: h.Env, Dir: a.Dir}
+		ph.StartTimeout, _ = time.ParseDuration(h.StartTimeout)
+		ph.CallTimeout, _ = time.ParseDuration(h.CallTimeout)
+		out = append(out, ph)
+	}
+	return out
+}
+
 // AgentID returns "<name>@<version>".
 func (a *Agent) AgentID() string { return fmt.Sprintf("%s@%d", a.Name, a.Version) }
 
@@ -31,14 +57,20 @@ func (a *Agent) Price() model.Price {
 	return priceOf(a.Model.Pricing)
 }
 
-// Prices returns the price of the primary model and of every fallback, keyed
-// by model name. If two candidates share a name, the primary's price wins.
+// Prices returns the price of the primary model, of every fallback and of the
+// plan role (task Q.5), keyed by model name. If two share a name, the first
+// wins: primary, then fallbacks, then the role.
 // Call only after Validate succeeded.
 func (a *Agent) Prices() map[string]model.Price {
 	out := map[string]model.Price{a.Model.Name: a.Price()}
 	for _, f := range a.Model.Fallbacks {
 		if _, ok := out[f.Name]; !ok {
 			out[f.Name] = priceOf(f.Pricing)
+		}
+	}
+	if r := a.Model.Roles.Plan; r != nil {
+		if _, ok := out[r.Name]; !ok {
+			out[r.Name] = priceOf(r.Pricing)
 		}
 	}
 	return out
@@ -75,21 +107,42 @@ func (a *Agent) ContextBudget() contextmgr.Budget {
 	return contextmgr.Budget{MaxInputTokens: a.Context.MaxInputTokens, KeepRecentSteps: a.Context.KeepRecentSteps}
 }
 
-// PolicyEngine builds the static policy, rules in file order.
+// PolicyEngine builds the static policy: included rules first, then the
+// agent's own rules, each in file order.
 // Call only after Validate succeeded.
 func (a *Agent) PolicyEngine() *policy.Static {
-	rules := make([]policy.Rule, 0, len(a.Policy.Rules))
+	rules := make([]policy.Rule, 0, len(a.Policy.Included)+len(a.Policy.Rules))
+	for _, ir := range a.Policy.Included {
+		rules = append(rules, toPolicyRule(ir.Rule))
+	}
 	for _, r := range a.Policy.Rules {
-		var risk adlcv1.RiskClass
-		if r.Risk != "" {
-			risk, _ = policy.ParseRiskClass(r.Risk)
-		}
-		d, _ := policy.ParseDecision(r.Decision)
-		rules = append(rules, policy.Rule{ID: r.ID, Risk: risk, Tool: r.Tool, Decision: d})
+		rules = append(rules, toPolicyRule(r))
 	}
 	def, _ := policy.ParseDecision(a.Policy.Default)
 	s, _ := policy.NewStatic(rules, def)
 	return s
+}
+
+// toPolicyRule converts a validated Rule.
+func toPolicyRule(r Rule) policy.Rule {
+	var risk adlcv1.RiskClass
+	if r.Risk != "" {
+		risk, _ = policy.ParseRiskClass(r.Risk)
+	}
+	d, _ := policy.ParseDecision(r.Decision)
+	out := policy.Rule{ID: r.ID, Risk: risk, Tool: r.Tool, Decision: d}
+	if r.Args != nil {
+		out.Args = make(map[string]policy.ArgMatcher, len(r.Args))
+		for k, m := range r.Args {
+			out.Args[k] = m.toPolicy()
+		}
+	}
+	return out
+}
+
+// toPolicy converts the YAML matcher.
+func (m ArgMatcher) toPolicy() policy.ArgMatcher {
+	return policy.ArgMatcher{Glob: m.Glob, Prefix: m.Prefix, Regex: m.Regex, In: m.In}
 }
 
 // ToolServers returns the tool servers with parsed risk classes.
@@ -113,4 +166,34 @@ func (a *Agent) ToolServers() []ParsedToolServer {
 		out = append(out, ps)
 	}
 	return out
+}
+
+// SandboxWorkspace returns the sandbox workspace directory, made absolute
+// against the agent file's directory ("" if there is no sandbox section or
+// no workspace).
+func (a *Agent) SandboxWorkspace() string {
+	if a.Sandbox == nil || a.Sandbox.Workspace == "" {
+		return ""
+	}
+	w := a.Sandbox.Workspace
+	if !filepath.IsAbs(w) {
+		w = filepath.Join(a.Dir, w)
+	}
+	return w
+}
+
+// SandboxSpec returns the spec of the sandbox for run runID, and false if the
+// agent has no sandbox section. Call only after Validate succeeded.
+func (a *Agent) SandboxSpec(runID string) (sandbox.Spec, bool) {
+	if a.Sandbox == nil {
+		return sandbox.Spec{}, false
+	}
+	return sandbox.Spec{
+		RunID:        runID,
+		Image:        a.Sandbox.Image,
+		WorkspaceDir: a.SandboxWorkspace(),
+		CPUs:         a.Sandbox.CPUs,
+		MemoryBytes:  a.Sandbox.MemoryMB << 20,
+		Network:      a.Sandbox.Network,
+	}, true
 }

@@ -1,0 +1,25 @@
+name: sandbox-hello
+version: 1
+model:
+  provider: fake
+system: |
+  You work in a sandbox. Use the shell tool to run commands in /workspace.
+sandbox:
+  image: golang:1.26
+  workspace: ./workspace
+  network: false
+tools:
+  - server: shell
+    command: ["adlc", "tool", "shell", "--sandbox", "{{sandbox_id}}"]
+    risk:
+      run: exec
+budget:
+  max_steps: 5
+  max_tool_calls: 5
+  max_wall_clock: 2m
+policy:
+  default: deny
+  rules:
+    - id: shell
+      risk: exec
+      decision: allow

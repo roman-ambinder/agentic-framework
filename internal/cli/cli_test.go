@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/roman-ambinder/agentic-framework/internal/buildinfo"
 )
 
@@ -65,5 +67,60 @@ func TestUnknownCommand(t *testing.T) {
 	code, _, _ := run(t, "nope")
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
+	}
+}
+
+func TestCommandsShareDefaultDB(t *testing.T) {
+	if defaultDBPath != ".adlc/events.db" {
+		t.Fatalf("defaultDBPath = %q", defaultDBPath)
+	}
+	cmds := map[string]*cobra.Command{
+		"run":       newRunCmd(),
+		"resume":    newResumeCmd(),
+		"trace":     newTraceCmd(),
+		"cost":      newCostCmd(),
+		"eval":      newEvalCmd(),
+		"approvals": newApprovalsCmd(),
+		"approve":   newApproveCmd(),
+	}
+	for name, cmd := range cmds {
+		t.Run(name, func(t *testing.T) {
+			f := cmd.Flags().Lookup("db")
+			if f == nil {
+				t.Fatal("no --db flag")
+			}
+			if f.DefValue != defaultDBPath {
+				t.Errorf("--db default = %q, want %q", f.DefValue, defaultDBPath)
+			}
+		})
+	}
+}
+
+func TestCommandsShareDefaultControlDB(t *testing.T) {
+	if defaultControlDBPath != ".adlc/control.db" {
+		t.Fatalf("defaultControlDBPath = %q", defaultControlDBPath)
+	}
+	cmds := map[string]*cobra.Command{
+		"run":     newRunCmd(),
+		"resume":  newResumeCmd(),
+		"approve": newApproveCmd(),
+		"kill":    newKillCmd(),
+		"unkill":  newUnkillCmd(),
+		"kills":   newKillsCmd(),
+		"agent":   newAgentCmd(),
+	}
+	for name, cmd := range cmds {
+		t.Run(name, func(t *testing.T) {
+			f := cmd.Flags().Lookup("control-db")
+			if f == nil {
+				f = cmd.PersistentFlags().Lookup("control-db")
+			}
+			if f == nil {
+				t.Fatal("no --control-db flag")
+			}
+			if f.DefValue != defaultControlDBPath {
+				t.Errorf("--control-db default = %q, want %q", f.DefValue, defaultControlDBPath)
+			}
+		})
 	}
 }

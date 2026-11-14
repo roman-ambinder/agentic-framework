@@ -30,7 +30,7 @@ func newCostCmd() *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&o.db, "db", ".adlc/events.db", "event log file")
+	f.StringVar(&o.db, "db", defaultDBPath, "event log file")
 	f.StringVar(&o.by, "by", "run", "group rows by run, model or agent")
 	f.BoolVar(&o.asJSON, "json", false, "print as JSON")
 	return cmd

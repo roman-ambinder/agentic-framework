@@ -56,7 +56,7 @@ func TestEvalDryRunWorstCase(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, stderr)
 	}
-	if want := "bugs=1 agents=2 worst_case_usd=2.500000\n"; stdout != want {
+	if want := "bugs=1 agents=2 repeat=1 worst_case_usd=2.500000\n"; stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 }
@@ -87,5 +87,27 @@ func TestEvalRejectsFakeProviderBeforeDocker(t *testing.T) {
 	want := "eval: agent " + agent + ": provider fake is not supported by adlc eval"
 	if code != 1 || !strings.Contains(stderr, want) || strings.Contains(stdout+stderr, "not available") {
 		t.Errorf("code = %d, stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+}
+
+func TestEvalDryRunRepeat(t *testing.T) {
+	a1 := writeBudgetAgent(t, "one", "2.00")
+	a2 := writeBudgetAgent(t, "two", "0.5")
+	code, stdout, stderr := run(t, "eval", miniSuite, "--agents", a1+","+a2, "--dry-run", "--repeat", "3")
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr)
+	}
+	if want := "bugs=1 agents=2 repeat=3 worst_case_usd=7.500000\n"; stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+}
+
+func TestEvalRepeatOutOfRange(t *testing.T) {
+	a := writeBudgetAgent(t, "one", "1")
+	for _, n := range []string{"0", "21"} {
+		code, _, stderr := run(t, "eval", miniSuite, "--agents", a, "--dry-run", "--repeat", n)
+		if code != 1 || !strings.Contains(stderr, "eval: --repeat must be between 1 and 20") {
+			t.Errorf("--repeat %s: code = %d, stderr = %q", n, code, stderr)
+		}
 	}
 }

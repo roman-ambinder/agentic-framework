@@ -22,12 +22,21 @@ import (
 // runOptions are the flags of `adlc run`.
 type runOptions struct {
 	agentPath, task, db, fakeScript, runID, modelName string
+	// agentDir, if set, is where tool commands, hooks and sandbox.workspace are resolved (registered agents).
+	agentDir string
+	// controlDB is the control database (kill switches); a missing file means no kill switch.
+	controlDB string
+	// startHook starts one hook plugin; nil means startPluginHook. Tests set it.
+	startHook hookStarter
+	// workspaceOut and keepSandbox only apply to `adlc run` with a sandbox.
+	workspaceOut string
+	keepSandbox  bool
 }
 
 func newRunCmd() *cobra.Command {
 	var o runOptions
 	cmd := &cobra.Command{
-		Use:   "run AGENT_YAML --task TEXT",
+		Use:   "run AGENT_YAML|NAME@N|NAME@ENV --task TEXT",
 		Short: "Run an agent on a task and print a summary",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -39,10 +48,14 @@ func newRunCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&o.task, "task", "", "first user message (required)")
-	f.StringVar(&o.db, "db", ".adlc/events.db", "event log file")
+	f.StringVar(&o.db, "db", defaultDBPath, "event log file")
+	f.StringVar(&o.controlDB, "control-db", defaultControlDBPath, "control database (kill switches)")
 	f.StringVar(&o.fakeScript, "fake-script", "", "fake model script (provider fake only)")
 	f.StringVar(&o.runID, "run-id", "", "run id (default: generated)")
 	f.StringVar(&o.modelName, "model-name", "", "overrides model.name from the agent file")
+	f.StringVar(&o.agentDir, "agent-dir", "", "for NAME@N or NAME@ENV: directory that tool commands, hooks and sandbox.workspace are resolved against (default: the directory the version was registered from)")
+	f.StringVar(&o.workspaceOut, "workspace-out", "", "where to copy the sandbox workspace after the run (default .adlc/workspaces/<run-id>)")
+	f.BoolVar(&o.keepSandbox, "keep-sandbox", false, "do not destroy the sandbox container after the run")
 	_ = cmd.MarkFlagRequired("task")
 	return cmd
 }
@@ -58,7 +71,11 @@ func loadAgent(o runOptions) (*agentconfig.Agent, error) {
 			}
 		}
 	}
-	a, err := agentconfig.Load(o.agentPath)
+	load := func() (*agentconfig.Agent, error) { return agentconfig.Load(o.agentPath) }
+	if o.agentDir != "" {
+		load = func() (*agentconfig.Agent, error) { return agentconfig.LoadAt(o.agentPath, o.agentDir) }
+	}
+	a, err := load()
 	if err != nil {
 		return nil, err
 	}
@@ -68,8 +85,19 @@ func loadAgent(o runOptions) (*agentconfig.Agent, error) {
 	return a, nil
 }
 
-// runAgent runs the agent once and prints the summary to stdout.
+// runAgent runs the agent once and prints the summary to stdout. A sandbox,
+// if the agent declares one, comes from the Docker backend.
 func runAgent(ctx context.Context, o runOptions, stdout io.Writer) error {
+	return runAgentWith(ctx, o, stdout, openDockerRunBackend)
+}
+
+// runAgentWith is runAgent with an injectable sandbox backend.
+func runAgentWith(ctx context.Context, o runOptions, stdout io.Writer, openSandbox openRunBackend) error {
+	o, cleanupRef, err := resolveAgentRef(ctx, o)
+	if err != nil {
+		return &exitError{code: 1, err: err}
+	}
+	defer cleanupRef()
 	a, err := loadAgent(o)
 	if err != nil {
 		return &exitError{code: 1, err: err}
@@ -90,16 +118,32 @@ func runAgent(ctx context.Context, o runOptions, stdout io.Writer) error {
 		return &exitError{code: 1, err: err}
 	}
 	defer store.Close()
+	ks, closeKS, err := openKillSwitch(ctx, o.controlDB)
+	if err != nil {
+		return &exitError{code: 1, err: err}
+	}
+	defer closeKS()
+	sb, err := startRunSandbox(ctx, a, runID, openSandbox)
+	if err != nil {
+		return &exitError{code: 1, err: err}
+	}
+	defer sb.close()
 	cfg, deps, cleanup, err := buildRun(ctx, a, o, runID, store)
 	if err != nil {
+		sb.destroy(ctx, stdout)
 		return &exitError{code: 1, err: err}
 	}
 	defer func() { _ = cleanup() }()
+	deps.KillSwitch = ks
 	state, err := harness.Run(ctx, cfg, deps)
 	if err != nil {
+		sb.keepForResume(stdout)
 		return &exitError{code: 1, err: err}
 	}
 	printSummary(stdout, state)
+	if err := sb.finish(ctx, o, state, stdout); err != nil {
+		return &exitError{code: 1, err: err}
+	}
 	if state.StopReason == adlcv1.StopReason_STOP_REASON_COMPLETED {
 		return nil
 	}

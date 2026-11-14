@@ -37,6 +37,7 @@ Generated protobuf package: `adlcv1 "<mod>/gen/go/adlc/v1"`.
 | `internal/costreport` | 1.11 | cost report from cost events (`adlc cost`) |
 | `evals/fixtures/ledger` | E.1 | the fixture Go project (own module `example.com/ledger`) |
 | `evals/suites/go-bugs/<bug-id>/` | E.2, format E.3 | seeded bugs (§9); `evals/suites/go.mod` keeps them out of the main module |
+| `internal/controlplane` | C.3, C.4 | control database `.adlc/control.db`: kill switches, agent registry |
 | `internal/cli` | 0.9.2 and others | cobra commands |
 
 ## §2 Model types — `internal/model`
@@ -370,11 +371,13 @@ type Client interface {
 // AllowAll allows everything. Tests only.
 type AllowAll struct{}
 
-// Rule matches on risk class and (optionally) tool name. First match wins.
+// Rule matches on risk class, tool name glob and (optionally) arguments.
+// All given conditions must hold. First match wins.
 type Rule struct {
 	ID       string
-	Risk     adlcv1.RiskClass // UNSPECIFIED = any risk
-	Tool     string           // "" = any tool; exact match otherwise
+	Risk     adlcv1.RiskClass       // UNSPECIFIED = any risk
+	Tool     string                 // "" = any tool; otherwise a glob (a plain name matches exactly)
+	Args     map[string]ArgMatcher  // nil = any arguments; every entry must match
 	Decision adlcv1.Decision
 }
 
@@ -387,6 +390,17 @@ type Static struct {
 // NewStatic validates the rules (ids non-empty, unique, not "default";
 // decisions set; def set) and returns a Static holding a copy of rules.
 func NewStatic(rules []Rule, def adlcv1.Decision) (*Static, error)
+
+// ArgMatcher (task C.2): exactly one of Glob, Prefix, Regex, In; matches a
+// top-level JSON string argument; missing or non-string never matches.
+type ArgMatcher struct {
+	Glob   string   // "*" no "/", "**" anything, "?" one char not "/"; [ ] { } \ rejected
+	Prefix string
+	Regex  string   // whole value: ^(?:Regex)$
+	In     []string
+}
+func (m ArgMatcher) Check() error // error text has no "policy:" prefix
+func CheckGlob(glob string) error // same
 
 // Names used in agent.yaml (task 0.9.1).
 var ErrUnknownName = errors.New("policy: unknown name")
@@ -521,16 +535,54 @@ type Config struct {
 	// Context limits the size of each model request (task 1.6.1).
 	// MaxInputTokens 0 = derived from the adapter's MaxContextTokens.
 	Context contextmgr.Budget
+	Plan    PlanConfig // task Q.4: planning call before step 1; zero = off
+}
+
+// PlanCallID is the call id of the planning call; its step is 0 (task Q.4).
+const PlanCallID = "plan"
+
+// DefaultPlanMaxTokens is PlanConfig.MaxTokens when it is zero.
+const DefaultPlanMaxTokens = 1024
+
+// DefaultPlanPrompt is PlanConfig.Prompt when it is empty.
+const DefaultPlanPrompt = "Before you start, write a short plan for this task: a numbered list of at most 7 steps, one line each, naming the files or tools you expect to use. Do not start the work yet and do not call any tools; reply with the plan only."
+
+// PlanFollowUp is the user message Transcript puts after the plan, so that a
+// request never ends with the assistant's own message.
+const PlanFollowUp = "Now carry out the plan above. Change it if you learn something that makes it wrong."
+
+// PlanConfig controls the planning call before step 1 (task Q.4). The zero
+// value means no planning call.
+type PlanConfig struct {
+	Enabled   bool
+	Prompt    string // sent after the task in the plan request; "" = DefaultPlanPrompt
+	MaxTokens int    // output limit of the plan call; 0 = DefaultPlanMaxTokens
+	// Model is the model id of the plan call (task Q.5); "" = Config.Model,
+	// and then Config.Effort is used as well.
+	Model string
+	// Effort of the plan call; used only when Model is set ("" = adapter default).
+	Effort string
 }
 
 // Deps are the run's collaborators.
 type Deps struct {
 	Log    Log
 	Model  model.Adapter
+	PlanModel model.Adapter // task Q.5: adapter of the plan call; nil = Model
 	Tools  toolrouter.Router
 	Policy policy.Client
 	Now    func() time.Time                                  // default time.Now
 	Sleep  func(ctx context.Context, d time.Duration) error // default: timer + ctx
+	// KillSwitch, if set, is asked before every model call and every tool
+	// call whether the run must stop (task C.3). nil = no kill switch.
+	KillSwitch KillSwitch
+}
+
+// KillSwitch says whether a run has been killed; *controlplane.Store implements it.
+type KillSwitch interface {
+	// Killed reports whether the run runID of agent agentID (Config.AgentID,
+	// "name@version") must stop, and why.
+	Killed(ctx context.Context, runID, agentID string) (killed bool, reason string, err error)
 }
 
 // Run executes a new run until it stops and returns its final state.
@@ -574,6 +626,19 @@ func VerifyCheckpoints(events []*adlcv1.Event) error
 
 // Resume continues a run that stopped without a final run_completed (task 1.7).
 func Resume(ctx context.Context, cfg Config, deps Deps) (*eventlog.RunState, error)
+
+// Fork starts cfg.RunID from the transcript of from.RunID up to and including
+// the checkpoint of step from.AtStep, then continues it with cfg (task Q.3).
+type ForkPoint struct {
+	RunID  string
+	AtStep uint32
+}
+func Fork(ctx context.Context, cfg Config, deps Deps, from ForkPoint) (*eventlog.RunState, error)
+func ForkEvents(events []*adlcv1.Event, atStep uint32) ([]*adlcv1.Event, error)
+var (
+	ErrNoCheckpoint = errors.New("harness: no checkpoint for that step")
+	ErrRunExists    = errors.New("harness: run already exists")
+)
 var (
 	ErrRunFinished        = errors.New("harness: run already finished")
 	ErrRunPaused          = errors.New("harness: run is waiting for approval")
@@ -585,6 +650,33 @@ var (
 const AbandonedOutput = "abandoned: the run stopped while this tool call was running; it may or may not have taken effect. Check before repeating it."
 const NotRunOutput = "not run: the run stopped before this tool call started. Call it again if it is still needed."
 ```
+
+```go
+// Approvals (task C.1). Approve continues a paused run in place once its last
+// pending approval is resolved; ResolveApproval records one of several.
+type Resolution struct {
+	ApprovalID string
+	Approved   bool
+	By         string // required
+	Comment    string
+}
+func CheckApproval(events []*adlcv1.Event, runID, approvalID string) (*eventlog.RunState, error)
+func ResolveApproval(ctx context.Context, log Log, runID string, res Resolution) (*eventlog.RunState, error)
+func Approve(ctx context.Context, cfg Config, deps Deps, res Resolution) (*eventlog.RunState, error)
+func RejectedOutput(by, comment string) string // "rejected by <by>[: <comment>]"
+var (
+	ErrRunNotPaused     = errors.New("harness: run is not waiting for approval")
+	ErrUnknownApproval  = errors.New("harness: unknown approval")
+	ErrApprovalResolved = errors.New("harness: approval already resolved")
+	ErrContinueRun      = errors.New("harness: last pending approval: the run must be continued with Approve")
+)
+```
+
+`Approve` appends `approval_resolved` (parent = its `approval_requested`); an approved call runs PreTool hooks, the tool and
+PostTool hooks without a second policy check; a rejected call gets an error
+`tool_call_completed` with `RejectedOutput`; the remaining calls of the step
+run normally, then a checkpoint, then the loop. Time spent paused does not
+count against `max_wall_clock`.
 
 `Resume` ignores `cfg.Task` (the task is in `run_started`), only appends events
 (first `run_resumed{next_step, verified_checkpoint_seq, abandoned_tool_calls,
@@ -608,6 +700,12 @@ every request through one `contextmgr.Manager` per run.
 ### §6.1 Events the harness writes, per step
 
 One *step* = one successful model call plus the tool calls it asked for.
+
+```
+When Config.Plan.Enabled, before step 1: model_call_started {call_id: "plan", step: 0}
+… model_call_completed (no tool calls, no checkpoint). It counts towards tokens and cost, not max_steps.
+Transcript turns it into an assistant message followed by the user message PlanFollowUp.
+With Deps.PlanModel (task Q.5) the plan's model_call_started has provider PlanModel.Provider() and model Plan.Model; its cost uses Prices[response model].
 
 ```
 model_call_started   {call_id: "m<step>", step, provider, model, attempt}
@@ -641,6 +739,7 @@ where the process stopped; it creates no message in `Transcript`.
 | Policy client returned an error | `ERROR` | `policy: <error>` |
 | Request too large for `Config.Context` (task 1.6.1) | `ERROR` | `context budget exceeded` |
 | `ctx` cancelled | `CANCELLED` | |
+| Kill switch says the run is killed (task C.3) | `CANCELLED` | `killed: <reason>` |
 
 Not a stop: an **unknown tool** (name not in `Tools()`) gets
 `tool_call_requested` with risk UNSPECIFIED and an error `tool_call_completed`
@@ -667,11 +766,24 @@ func (a *Agent) BudgetProto() *adlcv1.Budget    // nil if no limits
 func (a *Agent) PolicyEngine() *policy.Static
 func (a *Agent) ToolServers() []ParsedToolServer
 func ParseMicroUSD(s string) (int64, error)
+
+const AgentFileName = "agent.yaml"                    // task C.4
+type SourceFile struct{ Path string; Data []byte }     // Agent.Sources: agent file first, then system_file and policy files
+func DigestFiles(files []SourceFile) string            // "sha256:<hex>", algorithm in brief C.4
+func (a *Agent) Digest() string
+func LoadAt(path, workDir string) (*Agent, error)      // Agent.Dir = workDir; system_file relative to the file
 ```
 
 Task 1.6.1 adds the optional `context:` section (`max_input_tokens`,
 `keep_recent_steps`, both >= 0) and `(*Agent).ContextBudget() contextmgr.Budget`,
 which the CLI wiring assigns to `harness.Config.Context`.
+
+Task Q.4 adds the optional `planning:` section (enabled, prompt, max_tokens 0..1000000); harnessConfig maps it to harness.Config.Plan.
+
+Task C.2 adds `policy.include` (policy files, `PolicyFile{include, rules}`, paths relative to the naming file, no
+`default`), `args` matchers and tool globs in rules, and
+`Policy.Included []IncludedRule`; `PolicyEngine` evaluates included rules
+(depth first, each file once) before the agent's rules.
 
 Every `model.pricing` field (also in fallbacks) may, like `model.name`, be
 exactly `${VAR}`: it is replaced by the environment variable, an unset or empty
@@ -681,6 +793,11 @@ on the model the user picks, so agent files in `agents/` use this form.
 
 Task 1.3 adds `model.fallbacks` and `(*Agent).Prices() map[string]model.Price`.
 A fallback must not set `max_tokens` or `effort` (validation rejects them): the harness sends the primary's values and the router passes them through.
+
+Task Q.5 adds model.roles.plan (provider, name, effort, pricing; ${VAR} as for fallbacks; max_tokens,
+fallbacks and roles are rejected; ignored while planning is disabled). Prices() includes it (primary, then
+fallbacks, then the role; the first price for a name wins). Wiring: buildPlanModel(a, fakeScript)
+(model.Adapter, error), nil without a role.
 
 CLI wiring (task 0.9.2, `internal/cli/wiring.go`, unexported, shared by
 `adlc run`, `adlc resume` (1.7) and `adlc eval` (1.8)):
@@ -841,10 +958,14 @@ func ParseTestOutput(bug Bug, output []byte, exitCode int, timedOut bool) TestOu
 const DefaultImage = "golang:1.26"
 // task 1.8: AgentRun, Runner (RunOne, RunAll), Result, Report, WriteReport, PrintTable
 // task 1.9: Check, Grade, Bucket, ProviderSummary, Summary, Summarize
+// task Q.1: Runner.Repeat, Result.Attempt, Report.Repeat, PassAtK, BugAttempts, AgentBucket, AgentSummary, Summary.ByAgent, SummarizeAgents, AgentPair, AgentName, ReportInfo, CompareRow, BugChange, PairComparison, Comparison, BugStatus, Compare, PrintComparison
+// task Q.2: FailureCause and its Cause* constants, FailureCauses, Failure, FailureReport, EventReader, Classify, AnalyzeFailures, PrintFailures
 ```
 
 Exact field lists: briefs E.3, 1.8 and 1.9. Eval results are stored in the
 JSON report (with run ids), not as events.
+
+`Result.AgentDigest` (`agent_digest`, task C.4) is the digest of the agent file that produced the result.
 
 ## §10 Planned schema additions
 
@@ -854,6 +975,144 @@ JSON report (with run ids), not as events.
 | 1.3 | `ModelCallCompleted` | `string model` | 9 |
 | 1.7 | `Event` payload oneof | `RunResumed run_resumed` | 22 |
 | 0.11.1 | new file `plugin.proto` | `HookService`, `ToolCallInfo`, `PreToolRequest/Response`, `PostToolRequest/Response` | — |
+| Q.3 | `RunStarted` | `string forked_from_run_id` | 7 |
+| Q.3 | `RunStarted` | `uint32 forked_at_step` | 8 |
 
 Every addition is additive; `make proto-breaking` must pass. Before taking a
 number, check this table and the `.proto` file; add your row here in the same PR.
+
+## §11 M2 additions (briefs C.1–C.4, Q.1–Q.5)
+
+Shared decisions: `docs/impl/m2.md`. Each brief has the exact text of its
+additions; this section lists them so tasks do not collide. Implement a task's
+part only when you implement that task.
+
+### Harness (`internal/harness`)
+
+- **C.1 approvals:** `Resolution{ApprovalID, Approved, By, Comment}`;
+  `CheckApproval`, `ResolveApproval`, `Approve`, `RejectedOutput`; errors
+  `ErrRunNotPaused`, `ErrUnknownApproval`, `ErrApprovalResolved`,
+  `ErrContinueRun`. No schema change (`approval_resolved` has every field).
+- **C.3 kill switch:** `Deps.KillSwitch KillSwitch` (nil = off) with
+  `KillSwitch interface { Killed(ctx, runID, agentID string) (bool, string, error) }`;
+  checked before every model call and tool call; a killed run ends
+  `CANCELLED` with detail `killed: <reason>`; a failing check writes
+  `error_occurred` and the run continues.
+- **Q.3 fork:** `ForkPoint{RunID, AtStep}`, `Fork`, `ForkEvents`; errors
+  `ErrNoCheckpoint`, `ErrRunExists`; uses the §10 fields 7 and 8.
+- **Q.4 plan step:** `Config.Plan PlanConfig{Enabled, Prompt, MaxTokens}`;
+  constants `PlanCallID = "plan"`, `DefaultPlanMaxTokens`, `DefaultPlanPrompt`,
+  `PlanFollowUp`; the plan call is step 0, counts towards tokens and cost but
+  not `max_steps`.
+- **Q.5 step roles:** `Deps.PlanModel model.Adapter` (nil = `Deps.Model`);
+  `PlanConfig.Model`, `PlanConfig.Effort`.
+
+### Policy (`internal/policy`) — C.2
+
+`Rule.Tool` becomes a glob (a plain name still matches exactly), new
+`Rule.Args map[string]ArgMatcher`; `ArgMatcher{Glob, Prefix, Regex, In}`
+(exactly one set; matches top-level JSON string arguments only);
+`ArgMatcher.Check`, `CheckGlob` (errors without the `policy:` prefix, so
+agentconfig can prefix the field path).
+
+### Agent config (`internal/agentconfig`)
+
+- **C.2:** `policy.include` (policy files; no `default` in them), `args` and
+  tool globs in rules; included rules are evaluated first.
+- **C.4:** `AgentFileName = "agent.yaml"`, `SourceFile{Path, Data}`,
+  `DigestFiles`, `(*Agent).Digest`, `LoadAt(path, workDir)`.
+- **Q.4:** optional `planning:` section; **Q.5:** `model.roles.plan`.
+
+### Control plane (`internal/controlplane`) — C.3, C.4
+
+`Open(ctx, path, opts...)`, `Close`, `WithClock`; kills: `Scope`
+(`run`/`agent`/`all`), `Kill`, `Unkill`, `Active`, `Killed`; agent kills
+match `Config.AgentID` exactly (`hello@1`) or by name (`hello`); registry:
+`Ref`, `ParseRef`, `Env`, `ParseEnv`, `AgentVersion`, `Register`, `Version`,
+`Versions`, `Resolve`, `Gate`, `Promotion`, `Promote`.
+
+#### Control plane API (C.3)
+
+```go
+package controlplane
+
+func Open(ctx context.Context, path string, opts ...Option) (*Store, error) // "" and ":memory:" refused
+func WithClock(now func() time.Time) Option
+func (s *Store) Close() error
+
+type Scope string // ScopeRun "run", ScopeAgent "agent", ScopeAll "all"
+type Kill struct {
+	Scope     Scope
+	Target    string // run id, agent name or name@version, "" for all
+	Reason    string
+	CreatedAt time.Time // UTC
+}
+
+func (s *Store) Kill(ctx context.Context, scope Scope, target, reason string) error
+func (s *Store) Unkill(ctx context.Context, scope Scope, target string) error
+func (s *Store) Active(ctx context.Context) ([]Kill, error)
+func (s *Store) Killed(ctx context.Context, runID, agentID string) (bool, string, error)
+
+var ErrSchemaTooNew, ErrInvalidKill, ErrKillNotFound error
+```
+
+Agent kills match `Config.AgentID` exactly (`hello@1`) or by name (`hello` = every version).
+
+#### Agent registry API (C.4)
+
+```go
+package controlplane
+
+type Env string // EnvStaging "staging", EnvProd "prod"
+type Ref struct { Name string; Version int; Env Env } // NAME@N or NAME@ENV
+func ParseRef(s string) (Ref, error)
+func (r Ref) String() string
+func ParseEnv(s string) (Env, error)
+
+type AgentVersion struct {
+	Name string; Version int
+	AgentID, Digest, SourceDir string
+	CreatedAt time.Time
+	Envs  []Env                    // environments whose current version this is
+	Files []agentconfig.SourceFile // nil from Versions
+}
+func (v AgentVersion) Ref() string // "name@N"
+
+func (s *Store) Register(ctx context.Context, a *agentconfig.Agent) (v AgentVersion, created bool, err error)
+func (s *Store) Version(ctx context.Context, name string, version int) (AgentVersion, error)
+func (s *Store) Versions(ctx context.Context) ([]AgentVersion, error)
+func (s *Store) Resolve(ctx context.Context, ref Ref) (AgentVersion, error)
+
+type Gate struct { MinPassAt1 float64; MaxMedianUSDMicros int64 } // < 0 = no cost limit
+type Promotion struct {
+	Name string; Version int; Env Env; ReportPath string
+	PassAt1 float64; Runs int; MedianUSDMicros int64; PromotedAt time.Time
+}
+func (s *Store) Promote(ctx context.Context, name string, version int, env Env,
+	rep evals.Report, reportPath string, g Gate) (Promotion, error)
+
+var ErrInvalidRef, ErrInvalidAgent, ErrVersionNotFound, ErrNotPromoted, ErrReportMismatch, ErrPromotionRefused error
+```
+
+### Evals (`internal/evals`)
+
+The complete lists of Q.1 and Q.2 names are in §9; the lines below are a summary.
+
+
+- **C.4:** `Result.AgentDigest` (`agent_digest`).
+- **Q.1:** `Runner.Repeat`, `Result.Attempt`, `Report.Repeat`, `PassAtK`,
+  `Summary.ByAgent`, `Compare`, `PrintComparison` and the comparison types.
+- **Q.2:** `FailureCause` and its constants, `Classify`, `AnalyzeFailures`,
+  `PrintFailures`.
+
+### Tasks that edit the same code
+
+| Code | Tasks |
+|------|-------|
+| `internal/harness/loop.go`, `resume.go` | C.1, C.3, Q.3, Q.4, Q.5 |
+| `harness.Deps` | C.3 (`KillSwitch`), Q.5 (`PlanModel`) |
+| `evals.Result` | C.4 (`AgentDigest`), Q.1 (`Attempt`) |
+| `internal/agentconfig` | C.2, C.4, Q.4, Q.5 |
+
+All changes are additive, but run these tasks one after another (or merge
+carefully) rather than in parallel on the same files.

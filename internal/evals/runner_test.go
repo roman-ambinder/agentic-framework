@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -83,6 +84,15 @@ func TestRunOneSolved(t *testing.T) {
 	}
 	if !strings.Contains(env.out.String(), "ok-001 anthropic solved COMPLETED") {
 		t.Errorf("progress line missing: %q", env.out.String())
+	}
+}
+
+func TestRunOneRecordsAgentDigest(t *testing.T) {
+	env := newRunnerEnv(t, fixing)
+	a := testAgent(t, "coder", "anthropic")
+	res := env.r.RunOne(context.Background(), env.bug, a)
+	if res.AgentDigest != a.Digest() || !strings.HasPrefix(res.AgentDigest, "sha256:") {
+		t.Errorf("AgentDigest = %q, want %q", res.AgentDigest, a.Digest())
 	}
 }
 
@@ -261,5 +271,45 @@ func TestRunOneDeletedAgentGitStillGraded(t *testing.T) {
 	// agent's .git does not hide what changed.
 	if want := []string{"calc/calc.go"}; !slices.Equal(res.ChangedFiles, want) {
 		t.Errorf("ChangedFiles = %v, want %v (out = %q)", res.ChangedFiles, want, env.out.String())
+	}
+}
+
+func TestRunAllRepeat(t *testing.T) {
+	env := newRunnerEnv(t, doNothing)
+	instant := time.Date(2026, 11, 13, 10, 15, 2, 0, time.UTC)
+	env.r.Now = func() time.Time { return instant }
+	env.r.Repeat = 3
+	agents := []*agentconfig.Agent{testAgent(t, "first", "anthropic"), testAgent(t, "second", "openai")}
+	results, err := env.r.RunAll(context.Background(), []Bug{env.bug}, agents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 6 {
+		t.Fatalf("got %d results", len(results))
+	}
+	seen := map[string]bool{}
+	for i, r := range results {
+		wantAgent, wantAttempt := "first@1", i%3+1
+		if i >= 3 {
+			wantAgent = "second@1"
+		}
+		if r.Agent != wantAgent || r.Attempt != wantAttempt {
+			t.Errorf("result %d = %s attempt %d, want %s attempt %d", i, r.Agent, r.Attempt, wantAgent, wantAttempt)
+		}
+		if !strings.HasSuffix(r.RunID, "-a"+string(rune('0'+wantAttempt))) {
+			t.Errorf("run id %q lacks -a%d suffix", r.RunID, wantAttempt)
+		}
+		seen[r.RunID] = true
+	}
+	if len(seen) != 6 {
+		t.Errorf("run ids not distinct: %v", seen)
+	}
+}
+
+func TestRunOneIsAttemptOne(t *testing.T) {
+	env := newRunnerEnv(t, doNothing)
+	res := env.r.RunOne(context.Background(), env.bug, testAgent(t, "first", "anthropic"))
+	if res.Attempt != 1 || regexp.MustCompile(`-a[0-9]+$`).MatchString(res.RunID) {
+		t.Errorf("attempt %d run id %q", res.Attempt, res.RunID)
 	}
 }

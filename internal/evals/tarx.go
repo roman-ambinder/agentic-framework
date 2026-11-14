@@ -81,3 +81,9 @@ func writeTarFile(target string, r io.Reader, mode os.FileMode) error {
 	}
 	return f.Close()
 }
+
+// ExtractWorkspaceTar unpacks the archive CopyOut returns for the sandbox's
+// /workspace into dest.
+func ExtractWorkspaceTar(data []byte, dest string) error {
+	return extractTar(data, dest, "workspace")
+}
