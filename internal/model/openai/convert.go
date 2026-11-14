@@ -93,9 +93,9 @@ func assistantMessage(m model.Message) (oai.ChatCompletionMessageParamUnion, boo
 
 func addTools(p *oai.ChatCompletionNewParams, tools []model.ToolSpec) error {
 	for _, t := range tools {
-		var schema map[string]any
-		if err := json.Unmarshal(t.InputSchema, &schema); err != nil {
-			return fmt.Errorf("openai: tool %q: input schema is not a JSON object: %w", t.Name, err)
+		schema, err := toolSchema(t)
+		if err != nil {
+			return err
 		}
 		p.Tools = append(p.Tools, oai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name:        t.Name,
@@ -185,4 +185,27 @@ func usage(u oai.CompletionUsage) model.Usage {
 		CacheWriteTokens: u.PromptTokensDetails.CacheWriteTokens,
 		OutputTokens:     u.CompletionTokens,
 	}
+}
+
+// toolSchema returns the tool's input schema as a JSON object. A missing,
+// null or empty schema becomes an empty object schema, and a schema without
+// "type" or "properties" gets "object" and an empty properties object, so a
+// tool without parameters is sent the same way by every adapter.
+func toolSchema(t model.ToolSpec) (map[string]any, error) {
+	var schema map[string]any
+	if len(t.InputSchema) > 0 {
+		if err := json.Unmarshal(t.InputSchema, &schema); err != nil {
+			return nil, fmt.Errorf("openai: tool %q: input schema is not a JSON object: %w", t.Name, err)
+		}
+	}
+	if schema == nil {
+		schema = map[string]any{}
+	}
+	if _, ok := schema["type"]; !ok {
+		schema["type"] = "object"
+	}
+	if _, ok := schema["properties"]; !ok {
+		schema["properties"] = map[string]any{}
+	}
+	return schema, nil
 }

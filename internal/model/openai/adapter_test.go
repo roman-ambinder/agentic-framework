@@ -493,3 +493,36 @@ func TestContract(t *testing.T) {
 		return contractAPI(t, sc).adapter(t)
 	})
 }
+
+// TestRequestToolWithoutSchema checks that a tool with no input schema (or an
+// empty one) is sent with an empty object schema instead of failing, as the
+// Anthropic adapter does.
+func TestRequestToolWithoutSchema(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema json.RawMessage
+	}{
+		{name: "no schema"},
+		{name: "null", schema: json.RawMessage(`null`)},
+		{name: "empty object", schema: json.RawMessage(`{}`)},
+		{name: "type only", schema: json.RawMessage(`{"type":"object"}`)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := simpleReq()
+			req.Tools = []model.ToolSpec{{Name: "ping", InputSchema: tt.schema}}
+			f := fixtureAPI(t, "end_turn.json")
+			if _, err := f.adapter(t).Generate(context.Background(), req); err != nil {
+				t.Fatal(err)
+			}
+			fn := f.body0(t)["tools"].([]any)[0].(map[string]any)["function"].(map[string]any)
+			params, ok := fn["parameters"].(map[string]any)
+			if !ok || params["type"] != "object" {
+				t.Fatalf("parameters = %v, want an object schema", fn["parameters"])
+			}
+			if _, ok := params["properties"].(map[string]any); !ok {
+				t.Fatalf("parameters = %v, want a properties object", params)
+			}
+		})
+	}
+}
